@@ -14,5 +14,5 @@ CONFIG = {
     'dirichlet': 0.2
 
 }
-MODEL_PATH = './data/model_21.pt'
+MODEL_PATH = './data/model_30.pt'
 BUFFER_PATH = './data/buffer.pkl'

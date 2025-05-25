@@ -198,7 +198,7 @@ class BoardUI:
         self.status = 'new'  # new playing finished
         # 0,1分别代表黑方白方
         self.timers = {0: Timer(limit=60000, func=self.time_up), 1: Timer(limit=60000, func=self.time_up)}
-        self.players = {0: Human((rows, columns)), 1: MCTSPlayer(10000)}
+        self.players = {0: Human((rows, columns)), 1: Human((rows, columns))}
         self.winner = None
         self.history = []
 

@@ -1,20 +1,9 @@
 import collections
 import time
 import uuid
-from threading import Event
 
 import numpy as np
 from functions import apply_move, is_win
-
-
-class InferenceRequest:
-    """用来请求GPU推理和获取结果的中间类"""
-
-    def __init__(self, node_id, state):
-        self.node_id = node_id
-        self.state = state
-        self.result = None
-        self.is_done = False
 
 
 class DummyNode(object):
@@ -45,8 +34,6 @@ class NeuronNode:
         self.c_puct = c_puct
         self.valid_indices = np.flatnonzero((state[:, :, 0] + state[:, :, 1]) == 0)
         self.is_leaf = is_win(state, last_move) or len(self.valid_indices) == 0
-        self.queue = inference_queue
-        self.result_dict = result_dict
 
     @property
     def N(self):
@@ -85,8 +72,7 @@ class NeuronNode:
             if action not in self.children:  # 扩展真正节点
                 move = divmod(action, self.state.shape[1]) + (self.mark,)
                 state = apply_move(self.state, move)
-                self.children[action] = NeuronNode(state, move, self, inference_queue=self.queue,
-                                                   result_dict=self.result_dict)
+                self.children[action] = NeuronNode(state, move, self)
             return self.children[action]
 
         raise IndexError('Action not available')
@@ -113,7 +99,7 @@ class NeuronNode:
         self.is_expanded = True
         return self.get_child(action)
 
-    def evaluate_with_network(self):
+    def evaluate_with_network(self, inference_engine):
         # 将state转为tensor，h,w,c->1,c,h,w
         # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # state_tensor = torch.tensor(np.transpose(self.state, (2, 0, 1)), dtype=torch.float32).unsqueeze(0).to(device)
@@ -124,14 +110,14 @@ class NeuronNode:
         #     self.child_P = policy_probs.cpu().numpy()
         #     self.is_evaluated = True
         #     return value.item()
-        request_id = str(uuid.uuid4())
-        self.queue.put((request_id, self.state))
-        while request_id not in self.result_dict:
-            time.sleep(0.0001)
-        result = self.result_dict.pop(request_id)
-        self.child_P = result['policy']
+        policy, value = inference_engine.request(self.state)
+        if policy.shape != (81,):
+            print('state.shape:', self.state.shape)
+            print('policy.shape:', policy.shape)
+
+        self.child_P = policy
         self.is_evaluated = True
-        return result['value']
+        return value
 
     def back_propagate(self, result):
         node = self
@@ -143,8 +129,9 @@ class NeuronNode:
 
 
 class DeepMCTS:
-    def __init__(self, root_state: np.ndarray, inference_queue=None, result_dict=None):
-        self.root = NeuronNode(root_state, None, None, inference_queue=inference_queue, result_dict=result_dict)
+    def __init__(self, root_state: np.ndarray, inference_engine=None):
+        self.root = NeuronNode(root_state, None, None)
+        self.infer = inference_engine
 
     def choose_move(self):
         action = np.argmax(self.root.child_N)
@@ -170,7 +157,7 @@ class DeepMCTS:
                 node = node.expand()
 
             # Evaluation
-            value = node.evaluate_with_network()
+            value = node.evaluate_with_network(self.infer)
 
             # Back Propagation
             node.back_propagate(value)

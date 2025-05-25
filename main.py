@@ -11,7 +11,7 @@ class Game:
         pygame.init()
         self.screen = pygame.display.set_mode(CONFIG['screen_size'])
         pygame.display.set_caption("五子棋")
-        self.board = BoardUI(8, 8)
+        self.board = BoardUI(15, 15)
 
     def play(self):
         running = True
@@ -25,13 +25,9 @@ class Game:
             self.board.draw()
             pygame.display.update()
 
-    def quit(self):
-        self.board.quit()
-
 
 if __name__ == '__main__':
     game = Game()
     game.play()
-    game.quit()
     pygame.quit()
     sys.exit()

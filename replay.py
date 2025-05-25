@@ -38,7 +38,7 @@ class ReplayBuffer:
         batch = random.sample(self.buffer, min(self.batch_size, len(self.buffer)))
         states, probs, winners = zip(*batch)  # [B,H,W,2],[B,H*W],[B],第一个维度是tuple，需转为ndarray
         states = np.transpose(np.array(states), (0, 3, 1, 2))  # [B,H,W,2]->[B,2,H,W]
-        return states, np.array(probs), np.array(winners)
+        return states, np.array(probs), np.array(winners, dtype=np.float32)
 
     def save(self, path=BUFFER_PATH):
         with open(path, "wb") as f:

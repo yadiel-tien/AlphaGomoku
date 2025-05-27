@@ -6,11 +6,12 @@ import time
 import numpy as np
 import torch
 
+from config import DEVICE
+
 
 class InferenceEngine:
-    def __init__(self, model, device='cpu', batch_size=12, max_delay=1e-3):
-        self.model = copy.deepcopy(model).to(device).eval()
-        self.device = device
+    def __init__(self, model, batch_size=12, max_delay=1e-3):
+        self.model = copy.deepcopy(model).to(DEVICE).eval()
         self.batch_size = batch_size
         self.max_delay = max_delay
         self.queue = queue.Queue()
@@ -20,7 +21,7 @@ class InferenceEngine:
 
     def update_model(self, model):
         self.model.load_state_dict(model.state_dict())
-        self.model = self.model.to(self.device).eval()
+        self.model = self.model.to(DEVICE).eval()
 
 
     def _inference_loop(self):
@@ -36,7 +37,7 @@ class InferenceEngine:
                     continue
             if not batch: continue
 
-            batch_tensor = torch.from_numpy(np.stack(batch)).to(self.device)
+            batch_tensor = torch.from_numpy(np.stack(batch)).to(DEVICE)
             with torch.no_grad():
                 logits, values = self.model(batch_tensor)
                 # 避免batch只有一个时，出现维度错误

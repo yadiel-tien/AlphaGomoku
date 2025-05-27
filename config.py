@@ -1,4 +1,5 @@
 import pygame
+import torch
 
 PIECE_PLACED = pygame.event.custom_type()
 CONFIG = {
@@ -16,3 +17,4 @@ CONFIG = {
 }
 MODEL_PATH = './data/model_30.pt'
 BUFFER_PATH = './data/buffer.pkl'
+DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

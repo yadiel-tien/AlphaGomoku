@@ -1,13 +1,13 @@
 import threading
 import random
 
-import numpy as np
 import pygame
 import torch
 
-from config import PIECE_PLACED, CONFIG, MODEL_PATH
+from config import MODEL_PATH, DEVICE
 from constant import BOARD_GRID_SIZE
 from deepMcts import DeepMCTS
+from inference import InferenceEngine
 from mcts import MCTS
 from network import Net
 
@@ -15,7 +15,7 @@ from network import Net
 class Player:
     def __init__(self):
         self.is_active = False
-        self.pending_move = None
+        self.pending_action = None
         self._thinking = False
 
     def handle_input(self, event, env, last_move):
@@ -27,12 +27,12 @@ class Player:
     def draw(self):
         pass
 
-    def get_action(self, env, last_move):
+    def get_action(self, env, last_action):
         pass
 
     def reset(self):
         self.is_active = False
-        self.pending_move = None
+        self.pending_action = None
         self._thinking = False
 
 
@@ -61,7 +61,7 @@ class Human(Player):
                     self.cursor_pos = -1, -1
                 self._thinking = False
 
-    def get_action(self, env, last_move):
+    def get_action(self, env, last_action):
         env.render()
         while True:
             while True:
@@ -74,11 +74,12 @@ class Human(Player):
                     print("输入格式有误，请输入行列编号，逗号隔开。")
 
             pos = tuple(int(i) - 1 for i in pos)
-            if env.is_placeable(*pos):
+            action = env.coordinate2action(*pos)
+            if action in env.valid_actions():
                 break
             else:
                 print("输入位置不合法，请重新输入！")
-        return pos
+        return action
 
     def draw(self):
         if self._onboard():
@@ -107,11 +108,16 @@ class Human(Player):
 
 
 class AI(Player):
-    def __init__(self, iteration=1000):
+    def __init__(self, shape=(9, 9), model_id=-1, iteration=1000, silent=False):
         super().__init__()
+        model = Net(256, shape[0] * shape[1]).to(DEVICE)
+        path = MODEL_PATH if model_id == -1 else f'./data/model_{model_id}.pt'
+        model.load_state_dict(torch.load(path))
+        self.infer = InferenceEngine(model)
         self._iteration = iteration
         self.mcts = None
         self._thread = None
+        self.silent = silent
 
     def handle_input(self, event, board, last_move):
         """
@@ -120,24 +126,24 @@ class AI(Player):
         """
         pass
 
-    def get_action(self, env, last_move):
-        print('思考中...')
-        self._run_mcts(env.state, last_move)
-        print('选择落子：', tuple(i.item() + 1 for i in self.pending_move))
-        return self.pending_move
+    def get_action(self, env, last_action):
+        if not self.silent:
+            print('思考中...')
+        self._run_mcts(env.state, last_action)
+        if not self.silent:
+            h, w = env.action2coordinate(int(self.pending_action))
+            print(f'选择落子：({h + 1},{w + 1})')
+        return self.pending_action
 
-    def _run_mcts(self, state, last_move):
+    def _run_mcts(self, state, last_action):
         if self.mcts is None:
-            h, w, _ = state.shape
-            net = Net(256, h * w).to('cuda' if torch.cuda.is_available() else 'cpu')
-            net.load_state_dict(torch.load(MODEL_PATH))
-            self.mcts = DeepMCTS(state, net)
+            self.mcts = DeepMCTS(state, self.infer)
         else:
-            self.mcts.apply_move(last_move)
+            self.mcts.apply_action(last_action)
         # start = time.time()
         self.mcts.run(self._iteration)
         # print(f'{self._iteration} iteration took {time.time() - start:.2f} seconds')
-        self.pending_move = self.mcts.choose_move()[:2]
+        self.pending_action = self.mcts.choose_action()
         self._thinking = False
 
     def draw(self):
@@ -159,28 +165,29 @@ class MCTSPlayer(Player):
     def handle_input(self, event):
         pass
 
-    def get_action(self, env, last_move):
+    def get_action(self, env, last_action):
         print('思考中...')
-        self._run_mcts(env.state, last_move)
-        print('选择落子：', tuple(i.item() + 1 for i in self.pending_move))
-        return self.pending_move
+        self._run_mcts(env.state, last_action)
+        h, w = env.action2coordinate(int(self.pending_action))
+        print(f'选择落子：({h + 1},{w + 1})')
+        return self.pending_action
 
-    def update(self, env, last_move):
+    def update(self, env, last_action):
         if not self._thinking:
             # 新线程运行MCTS
             self._thinking = True
-            self._thread = threading.Thread(target=self._run_mcts, args=(env.state.copy(), last_move))
+            self._thread = threading.Thread(target=self._run_mcts, args=(env.state.copy(), last_action))
             self._thread.start()
 
-    def _run_mcts(self, state, last_move):
+    def _run_mcts(self, state, last_action):
         if self.mcts is None:
-            self.mcts = MCTS(state, last_move)
+            self.mcts = MCTS(state)
         else:
-            self.mcts.apply_opponent_move(state, last_move)
+            self.mcts.apply_opponent_action(state, last_action)
         # start = time.time()
         self.mcts.run(self._iteration)
         # print(f'{self._iteration} iteration took {time.time() - start:.2f} seconds')
-        self.pending_move = self.mcts.choose_move()[:2]
+        self.pending_action = self.mcts.choose_action()
         self._thinking = False
 
     def draw(self):
@@ -196,7 +203,9 @@ class RandomPlayer(Player):
     def __init__(self):
         super().__init__()
 
-    def get_action(self, env, last_move):
-        valid_moves = env.valid_indices()
-        move = tuple(random.choice(valid_moves))
-        return move
+    def get_action(self, env, last_action):
+        valid_action = env.valid_actions()
+        return random.choice(valid_action)
+
+    def reset(self):
+        pass

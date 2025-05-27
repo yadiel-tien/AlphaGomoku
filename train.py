@@ -1,3 +1,4 @@
+import copy
 import os.path
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6,10 +7,11 @@ import torch
 import numpy as np
 from torch import optim
 from board import GomokuEnv
-from config import MODEL_PATH
+from config import MODEL_PATH, DEVICE
 from deepMcts import DeepMCTS
 from inference import InferenceEngine
 from network import Net
+from player import RandomPlayer, AI
 from replay import ReplayBuffer
 import torch.nn.functional as F
 
@@ -17,17 +19,18 @@ import torch.nn.functional as F
 class Trainer:
     def __init__(self, rows, columns, n_workers):
         self.rows, self.columns = rows, columns
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = Net(256, rows * columns).to(self.device)
+        self.model = Net(256, rows * columns).to(DEVICE)
         self.buffer = ReplayBuffer(30000, 128)
-        self.infer = InferenceEngine(self.model, self.device)
+        self.infer = InferenceEngine(self.model)
         self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
         self.pool = ThreadPoolExecutor(n_workers)
+        self.best_model_index = 0
 
     def load(self):
         self.buffer.load()
-        if os.path.exists(MODEL_PATH):
-            self.model.load_state_dict(torch.load(MODEL_PATH))
+        path = f'./data/model_{self.best_model_index}.pt'
+        if os.path.exists(path):
+            self.model.load_state_dict(torch.load(path))
 
     def save(self, index=0):
         self.buffer.save()
@@ -44,9 +47,8 @@ class Trainer:
             states = []
             pis = []
             players = []
-            current_player = 0
             state, _ = env.reset()
-            mcts = DeepMCTS(state, self.infer)
+            mcts = DeepMCTS(state, self.infer, is_self_play=True)
             done = False
             reward = 0
 
@@ -56,14 +58,17 @@ class Trainer:
                 # 采集数据
                 states.append(np.copy(state))
                 pis.append(np.copy(pi))
-                players.append(current_player)
+                players.append(env.current_player)
                 # 根据pi来选择动作
                 action = np.random.choice(len(pi), p=pi)
                 state, reward, done, _, _ = env.step(action)  # 执行落子
-                mcts.apply_move(env.action2index(action))  # mcts也要根据action进行对应裁剪
-                current_player = 1 - current_player  # 切换玩家，0或1
+                mcts.apply_action(action)  # mcts也要根据action进行对应裁剪
+
             # 一局结束，获取winner ID（0，1）,平局-1
-            winner = env.get_winner(reward, 1 - current_player)
+            if reward:
+                winner = 1 - env.current_player
+            else:
+                winner = -1
 
             # 根据winner和player的到针对player的比赛结果z，收集数据
             for state, pi, player in zip(states, pis, players):
@@ -81,9 +86,9 @@ class Trainer:
         for epoch in range(epochs):
             # 批量数据获取，转tensor
             states, pis, zs = self.buffer.get_batch()
-            states = torch.from_numpy(states).to(self.device)  # 【B，2,H,W]
-            pis = torch.from_numpy(pis).to(self.device)  # [B,H*W]
-            zs = torch.from_numpy(zs).to(self.device)  # [B]
+            states = torch.from_numpy(states).to(DEVICE)  # 【B，2,H,W]
+            pis = torch.from_numpy(pis).to(DEVICE)  # [B,H*W]
+            zs = torch.from_numpy(zs).to(DEVICE)  # [B]
 
             # 模型前向推理
             policy_logits, values = self.model(states)
@@ -108,9 +113,9 @@ class Trainer:
                     f"policy_loss={policy_loss.item():.4f}, value_loss={value_loss.item():.4f}"
                 )
 
-    def train(self, epochs=30, total_games=100, n_workers=32):
+    def train(self, epochs=100, total_games=100, n_workers=32):
         # 根据保存的路径获取开始轮次
-        iteration_start = int(MODEL_PATH.split('_')[-1].split('.')[0]) if os.path.exists(MODEL_PATH) else 0
+        iteration_start = self.best_model_index
 
         for i in range(epochs):
             print(f'Current Iteration:{i + 1},Total Iteration:{iteration_start + i + 1}')
@@ -124,7 +129,7 @@ class Trainer:
 
             duration = time.time() - start
             print(
-                f'采集到{len(experiences)}数据，用时{duration:.2f}秒,平均每个用时数据用时{duration / len(experiences) :.6f}。')
+                f'采集到{len(experiences)}原始数据，用时{duration:.2f}秒,平均每个用时数据用时{duration / len(experiences) :.4f}。')
 
             for experience in experiences:
                 self.buffer.add(*experience)
@@ -138,6 +143,23 @@ class Trainer:
             # 保存数据，便于以后使用
             self.save(iteration_start + i + 1)
 
+    def eval(self, index):
+        futures = []
+        for _ in range(10):
+            env = self.make_env()
+            players = [AI(model_id=index, silent=True), AI(model_id=self.best_model_index, silent=True)]
+            futures.append(self.pool.submit(env.evaluate, players, 2))
+        result = []
+        for future in as_completed(futures):
+            result.extend(future.result())
+        win_rate = result.count((1, 0)) / len(result)
+        print(f"win_rate:{win_rate:.2f}")
+        if win_rate > 0.55:
+            self.best_model_index = index
+            print(f'最佳玩家更新为{index}')
+        else:
+            print(f'最佳玩家为更新,仍旧为{self.best_model_index}')
+
     def shutdown(self):
         self.pool.shutdown()
         self.infer.shutdown()
@@ -146,5 +168,12 @@ class Trainer:
 if __name__ == '__main__':
     # 总的轮次
     trainer = Trainer(9, 9, n_workers=12)
+    # for epoch in range(20):
+    #     trainer.load()
+    #     trainer.train(total_games=24)
+    #     all_file = os.listdir('./data/')
+    #     index = max(int(f.split('_')[-1].split('.')[0]) for f in all_file)
+    #     trainer.eval(index)
+    # trainer.shutdown()
     trainer.train(total_games=24)
     trainer.shutdown()

@@ -17,14 +17,14 @@ import torch.nn.functional as F
 
 
 class Trainer:
-    def __init__(self, rows, columns, n_workers):
+    def __init__(self, rows, columns, n_workers, best_model_index):
         self.rows, self.columns = rows, columns
         self.model = Net(256, rows * columns).to(DEVICE)
         self.buffer = ReplayBuffer(30000, 128)
         self.infer = InferenceEngine(self.model)
         self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
         self.pool = ThreadPoolExecutor(n_workers)
-        self.best_model_index = 0
+        self.best_model_index = best_model_index
 
     def load(self):
         self.buffer.load()
@@ -105,15 +105,13 @@ class Trainer:
             loss.backward()  # 反向传播
             self.optimizer.step()  # 更新参数
 
-            # 将训练好的参数同步给推理模型
-            self.infer.update_model(self.model)
             if (epoch + 1) % 5 == 0 or epoch == 0:
                 print(
                     f"Epoch {epoch + 1}: loss={loss.item():.4f}, "
                     f"policy_loss={policy_loss.item():.4f}, value_loss={value_loss.item():.4f}"
                 )
 
-    def train(self, epochs=100, total_games=100, n_workers=32):
+    def train(self, epochs=100, total_games=100):
         # 根据保存的路径获取开始轮次
         iteration_start = self.best_model_index
 
@@ -123,7 +121,7 @@ class Trainer:
 
             # 多线程并行采集对战数据
             start = time.time()
-            futures = [self.pool.submit(self.self_play, n_simulation=200) for _ in range(total_games)]
+            futures = [self.pool.submit(self.self_play, n_simulation=500) for _ in range(total_games)]
             for f in as_completed(futures):
                 experiences.extend(f.result())
 
@@ -139,6 +137,9 @@ class Trainer:
             self.fit(epochs=100)
             duration = time.time() - start
             print(f"训练完成，用时{duration:.2f}秒。")
+
+            # 将训练好的参数同步给推理模型
+            self.infer.update_model(self.model)
 
             # 保存数据，便于以后使用
             self.save(iteration_start + i + 1)
@@ -167,7 +168,7 @@ class Trainer:
 
 if __name__ == '__main__':
     # 总的轮次
-    trainer = Trainer(9, 9, n_workers=12)
+    trainer = Trainer(9, 9, n_workers=12, best_model_index=0)
     # for epoch in range(20):
     #     trainer.load()
     #     trainer.train(total_games=24)
@@ -175,5 +176,6 @@ if __name__ == '__main__':
     #     index = max(int(f.split('_')[-1].split('.')[0]) for f in all_file)
     #     trainer.eval(index)
     # trainer.shutdown()
+    trainer.load()
     trainer.train(total_games=24)
     trainer.shutdown()

@@ -57,11 +57,12 @@ class PolicyHead(nn.Module):
         # x:[B,n_filters*H*W]
         x = self.fc(x)
         # x:[B,H*W]
-        probs = torch.softmax(x, dim=-1)  # 在最后一维上应用 softmax
-        # probs:[B,H*W]
-        probs = probs.squeeze(0)  # 如果批量为1，就消除批量层
+        # 如果批量为1，就消除批量层
         # 如果B=1，则[1,H*W]->[H*W]
-        return probs
+        if x.ndim == 1:
+            x = x.squeeze(0)
+        # 直接返回原始 Logits
+        return x
 
 
 class ValueHead(nn.Module):

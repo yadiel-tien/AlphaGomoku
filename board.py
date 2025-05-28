@@ -368,5 +368,5 @@ class BoardUI:
 if __name__ == '__main__':
     h, w = 9, 9
     env = GomokuEnv(h, w)
-    competitors = [Human((h, w)), AI(model_id=77, iteration=1000)]
+    competitors = [Human((h, w)), AI(model_id=33, iteration=1000)]
     env.run(competitors)

@@ -18,7 +18,7 @@ class DummyNode(object):
 
 
 class NeuronNode:
-    def __init__(self, state, last_action=None, to_play=1, parent=None, c_puct=5):
+    def __init__(self, state, last_action=None, parent=None, c_puct=5):
         self.state = state
         self.last_action = last_action
         self.parent = parent if parent else DummyNode()
@@ -27,19 +27,11 @@ class NeuronNode:
         self.child_W = np.zeros(state.shape[0] * state.shape[1], dtype=np.float32)  # 累计价值
         self.child_P = np.zeros(state.shape[0] * state.shape[1], dtype=np.float32)  # 先验概率
         self.is_expanded = False
-        self.is_evaluated = False
         self.c_puct = c_puct
         self.valid_actions = np.flatnonzero((state[:, :, 0] + state[:, :, 1]) == 0)
-        self.is_leaf = self._check_leaf()
-        self.to_play = to_play
 
     def __repr__(self):
         return f'NeuronNode(action={self.last_action},N={self.N},W={self.W:.2f})'
-
-    def _check_leaf(self):
-        if self.last_action is None:
-            return False
-        return is_win(self.state, self.last_action) or len(self.valid_actions) == 0
 
     @property
     def N(self):
@@ -75,7 +67,7 @@ class NeuronNode:
 
     @property
     def child_scores(self):
-        return self.child_Q * self.to_play + self.child_U
+        return self.child_Q + self.child_U
 
     def get_child(self, action):
         if action in self.valid_actions:
@@ -84,7 +76,6 @@ class NeuronNode:
                 self.children[action] = NeuronNode(
                     new_state,
                     last_action=action,
-                    to_play=-self.to_play,
                     parent=self
                 )
             return self.children[action]
@@ -96,36 +87,18 @@ class NeuronNode:
         action = self.valid_actions[index]
         return self.get_child(action)
 
-    def expand(self):
-        # 采样合法动作，归一化
-        probs = self.child_P[self.valid_actions]
-        probs_sum = probs.sum()
-        if probs_sum == 0:
-            probs = np.ones_like(probs) / len(probs)
-        else:
-            probs = probs / probs_sum
-
-        # 选择最优孩子
-        index = np.random.choice(len(self.valid_actions), p=probs)
-        action = self.valid_actions[index]
-
-        # 标记已扩展
-        self.is_expanded = True
-        return self.get_child(action)
-
     def evaluate(self, inference_engine, add_noise):
         if is_win(self.state, self.last_action):
             return 1.0
         elif len(self.valid_actions) == 0:
             return 0.0
-        policy, value = inference_engine.request(self.state)
 
+        policy, value = inference_engine.request(self.state)
         self.child_P = policy
-        self.child_W = np.ones_like(self.child_W) * value
         # 只在根节点添加噪声
         if add_noise and isinstance(self.parent, DummyNode):
             self.inject_noise()
-        self.is_evaluated = True
+        self.is_expanded = True
         return value
 
     def back_propagate(self, result):
@@ -133,7 +106,7 @@ class NeuronNode:
         while not isinstance(node, DummyNode):
             node.N += 1
             node.W += result
-            # result = -result
+            result = -result
             node = node.parent
 
     def inject_noise(self, alpha=0.3, noise_weight=0.25):
@@ -142,13 +115,13 @@ class NeuronNode:
             return
 
         noise = np.random.dirichlet([alpha] * legal_len)
-        self.child_P[self.valid_actions] += noise * noise_weight + (1 - noise_weight) * self.child_P[
+        self.child_P[self.valid_actions] = noise * noise_weight + (1 - noise_weight) * self.child_P[
             self.valid_actions]
 
 
 class DeepMCTS:
     def __init__(self, root_state: np.ndarray, inference_engine, is_self_play=False):
-        self.root = NeuronNode(root_state, to_play=1)
+        self.root = NeuronNode(root_state)
         self.infer = inference_engine
         self.is_self_play = is_self_play
 
@@ -165,13 +138,9 @@ class DeepMCTS:
     def run(self, iteration=1000):
         for _ in range(iteration):
             node = self.root
-            # selection
+            # selection & Expansion
             while node.is_expanded:
                 node = node.select()
-
-            # Expansion
-            if node.is_evaluated and not node.is_leaf:
-                node = node.expand()
 
             # Evaluation
             value = node.evaluate(self.infer, add_noise=self.is_self_play)

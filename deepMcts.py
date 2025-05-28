@@ -18,7 +18,7 @@ class DummyNode(object):
 
 
 class NeuronNode:
-    def __init__(self, state, last_action=None, parent=None, c_puct=2.5):
+    def __init__(self, state, last_action=None, to_play=1, parent=None, c_puct=5):
         self.state = state
         self.last_action = last_action
         self.parent = parent if parent else DummyNode()
@@ -31,6 +31,10 @@ class NeuronNode:
         self.c_puct = c_puct
         self.valid_actions = np.flatnonzero((state[:, :, 0] + state[:, :, 1]) == 0)
         self.is_leaf = self._check_leaf()
+        self.to_play = to_play
+
+    def __repr__(self):
+        return f'NeuronNode(action={self.last_action},N={self.N},W={self.W:.2f})'
 
     def _check_leaf(self):
         if self.last_action is None:
@@ -71,13 +75,18 @@ class NeuronNode:
 
     @property
     def child_scores(self):
-        return self.child_Q + self.child_U
+        return self.child_Q * self.to_play + self.child_U
 
     def get_child(self, action):
         if action in self.valid_actions:
             if action not in self.children:  # 扩展真正节点
                 new_state = apply_action(self.state, action)
-                self.children[action] = NeuronNode(new_state, action, self)
+                self.children[action] = NeuronNode(
+                    new_state,
+                    last_action=action,
+                    to_play=-self.to_play,
+                    parent=self
+                )
             return self.children[action]
 
         raise IndexError('Action not available')
@@ -124,7 +133,7 @@ class NeuronNode:
         while not isinstance(node, DummyNode):
             node.N += 1
             node.W += result
-            result = -result
+            # result = -result
             node = node.parent
 
     def inject_noise(self, alpha=0.3, noise_weight=0.25):
@@ -133,12 +142,13 @@ class NeuronNode:
             return
 
         noise = np.random.dirichlet([alpha] * legal_len)
-        self.child_P[self.valid_actions] += noise * noise_weight + (1 - noise_weight) * self.child_P[self.valid_actions]
+        self.child_P[self.valid_actions] += noise * noise_weight + (1 - noise_weight) * self.child_P[
+            self.valid_actions]
 
 
 class DeepMCTS:
     def __init__(self, root_state: np.ndarray, inference_engine, is_self_play=False):
-        self.root = NeuronNode(root_state)
+        self.root = NeuronNode(root_state, to_play=1)
         self.infer = inference_engine
         self.is_self_play = is_self_play
 

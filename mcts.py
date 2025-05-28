@@ -21,6 +21,9 @@ class Node:
         self.uct_dirty = True
         self.is_leaf = self._check_leaf()
 
+    def __repr__(self):
+        return f'Node(action={self.last_action}, visits={self.visits})'
+
     def _check_leaf(self):
         """已经胜利、棋盘下满则为叶子节点"""
         if self.last_action is None:

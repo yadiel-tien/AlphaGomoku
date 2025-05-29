@@ -1,6 +1,10 @@
+import asyncio
+import json
 import threading
 import random
 
+import aiohttp
+import requests
 import pygame
 import torch
 
@@ -108,42 +112,82 @@ class Human(Player):
         self.cursor_pos = -1, -1
 
 
-class AI(Player):
-    def __init__(self, shape=(9, 9), model_id=-1, iteration=1000, silent=False):
+class AIClient(Player):
+    def __init__(self):
+        super().__init__()
+        self._thread = None
+
+    def update(self, env):
+        if not self._thinking:
+            # 新线程运行MCTS
+            self._thinking = True
+            self._thread = threading.Thread(target=self.request_move, args=(env.state, env.last_action))
+            self._thread.start()
+
+    def request_move(self, state, last_action):
+        try:
+            url = 'http://192.168.0.126:5000/make_move'
+            headers = {'content-type': 'application/json'}
+            payload = {
+                'state': state.tolist(),
+                'last_action': int(last_action)
+            }
+            response = requests.post(url, data=json.dumps(payload), headers=headers)
+            response.raise_for_status()  # 检查http错误
+            response = response.json()
+
+            self.pending_action = response.get('action')
+            self._thinking = False
+
+        except requests.exceptions.RequestException as e:
+            print(f'发生错误：{e}')
+
+    def request_reset(self):
+        try:
+            url = 'http://192.168.0.126:5000/reset'
+            response = requests.get(url)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f'发生错误：{e}')
+
+    def reset(self):
+        self._thread = threading.Thread(target=self.request_reset)
+        self._thread.start()
+        super().reset()
+
+
+class AIServer(Player):
+    def __init__(self, shape, model_id, iteration=1000, silent=False):
         super().__init__()
         model = Net(256, shape[0] * shape[1]).to(DEVICE)
-        path = MODEL_PATH if model_id == -1 else f'./data/model_{model_id}.pt'
+        path = f'./data/model_{model_id}.pt'
         model.load_state_dict(torch.load(path))
         self.infer = InferenceEngine(model)
         self._iteration = iteration
         self.mcts = None
-        self._thread = None
         self.silent = silent
 
     def get_action(self, env):
         if not self.silent:
             print('思考中...')
-        self._run_mcts(env.state, env.last_action)
+        self.run_mcts(env.state, env.last_action)
         if not self.silent:
             h, w = env.action2coordinate(int(self.pending_action))
             print(f'选择落子：({h + 1},{w + 1})')
         return self.pending_action
 
-    def _run_mcts(self, state, last_action):
+    def run_mcts(self, state, last_action):
         if self.mcts is None:
             self.mcts = NeuronMCTS(state, self.infer)
         else:
-            self.mcts.apply_action(last_action)
-        # start = time.time()
+            self.mcts.apply_action(state, last_action)
         self.mcts.run(self._iteration)
-        # print(f'{self._iteration} iteration took {time.time() - start:.2f} seconds')
         self.pending_action = self.mcts.choose_action()
         self._thinking = False
 
     def reset(self):
         super().reset()
         self.mcts = None
-        self._thread = None
 
 
 class MCTSPlayer(Player):

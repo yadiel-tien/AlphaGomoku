@@ -1,15 +1,12 @@
 import re
 
 import gymnasium as gym
-import torch.cuda
 from gymnasium import spaces
 import pygame
 
 from constant import BOARD_GRID_SIZE
-from deepMcts import NeuronMCTS
 from functions import is_win
-from network import Net
-from player import Human, MCTSPlayer, AI, RandomPlayer
+from player import Human, AIServer
 from ui import Button
 import numpy as np
 
@@ -153,7 +150,7 @@ class GomokuEnv(gym.Env):
 
 
 class BoardUI:
-    def __init__(self, rows=15, columns=15):
+    def __init__(self, rows=15, columns=15, players=None):
         self.black_piece = pygame.image.load('graphics/black.png')
         self.white_piece = pygame.image.load('graphics/white.png')
         self.mark_pic = pygame.image.load('graphics/circle.png')
@@ -165,7 +162,7 @@ class BoardUI:
         self.status = 'new'  # new playing finished
         # 0,1分别代表黑方白方
         self.timers = {0: Timer(limit=60000, func=self.time_up), 1: Timer(limit=60000, func=self.time_up)}
-        self.players = {0: Human((rows, columns)), 1: Human((rows, columns))}
+        self.players = players
         self.winner = None
         self.history = []
 
@@ -338,7 +335,7 @@ class BoardUI:
 if __name__ == '__main__':
     h, w = 9, 9
     env = GomokuEnv(h, w)
-    competitors = [Human((h, w)), AI(model_id=291, iteration=1000)]
+    competitors = [Human((h, w)), AIServer(model_id=291, iteration=1000)]
     result = env.run(competitors)
     env.render()
     if result == (1, 0):

@@ -4,6 +4,7 @@ import pygame
 
 from board import BoardUI
 from config import CONFIG
+from player import Human, AIClient
 
 
 class Game:
@@ -11,7 +12,9 @@ class Game:
         pygame.init()
         self.screen = pygame.display.set_mode(CONFIG['screen_size'])
         pygame.display.set_caption("五子棋")
-        self.board = BoardUI(15, 15)
+        h, w = 9, 9
+        players = {0:Human((h, w)), 1:AIClient()}
+        self.board = BoardUI(9, 9, players)
 
     def play(self):
         running = True

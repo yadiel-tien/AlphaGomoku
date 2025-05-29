@@ -179,7 +179,7 @@ class Trainer:
 
 if __name__ == '__main__':
     # 总的轮次
-    trainer = Trainer(9, 9, n_workers=12, best_model_index=100)
+    trainer = Trainer(9, 9, n_workers=12, best_model_index=311)
     # for epoch in range(20):
     #     trainer.load()
     #     trainer.train(total_games=24)
@@ -188,8 +188,8 @@ if __name__ == '__main__':
     #     trainer.eval(index)
     # trainer.shutdown()
     trainer.load()
-    # trainer.train(n_games=24, epochs=300)
+    trainer.train(n_games=24, epochs=300)
     # trainer.eval(40)
-    # trainer.shutdown()
-    _,_,zs = trainer.buffer.get_batch()
-    print(f'1:{np.count_nonzero(zs==1)},-1:{np.count_nonzero(zs==-1)},0:,{np.count_nonzero(zs==0)}')
+    trainer.shutdown()
+    # _,_,zs = trainer.buffer.get_batch()
+    # print(f'1:{np.count_nonzero(zs==1)},-1:{np.count_nonzero(zs==-1)},0:,{np.count_nonzero(zs==0)}')

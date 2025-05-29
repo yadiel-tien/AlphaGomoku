@@ -72,7 +72,7 @@ class NeuronNode:
                 )
             return self.children[action]
 
-        raise IndexError('Action not available')
+        return None
 
     def select(self):
         index = np.argmax(self.child_scores[self.valid_actions])
@@ -112,8 +112,8 @@ class NeuronNode:
 
 
 class NeuronMCTS:
-    def __init__(self, root_state: np.ndarray, inference_engine, is_self_play=False):
-        self.root = NeuronNode(root_state)
+    def __init__(self, root_state, inference_engine, last_action=None, is_self_play=False):
+        self.root = NeuronNode(root_state, last_action)
         self.infer = inference_engine
         self.is_self_play = is_self_play
 
@@ -123,9 +123,15 @@ class NeuronMCTS:
         self.root.parent = DummyNode()
         return action
 
-    def apply_action(self, action):
-        self.root = self.root.get_child(action)
-        self.root.parent = DummyNode()
+    def apply_action(self, state, last_action):
+        node = self.root.get_child(last_action)
+        if node is None or not np.array_equal(node.state, state):
+            print('new node')
+            self.root = NeuronNode(state, last_action)
+        else:
+            print('found node')
+            self.root = node
+            self.root.parent = DummyNode()
 
     def run(self, iteration=1000):
         for _ in range(iteration):

@@ -18,7 +18,7 @@ class DummyNode(object):
 
 
 class NeuronNode:
-    def __init__(self, state, last_action=None, parent=None, c_puct=5):
+    def __init__(self, state, last_action=None, parent=None, c_puct=3):
         self.state = state
         self.last_action = last_action
         self.parent = parent if parent else DummyNode()
@@ -49,17 +49,9 @@ class NeuronNode:
     def W(self, value):
         self.parent.child_W[self.last_action] = value
 
-    # @property
-    # def Q(self):
-    #     return self.W / (1 + self.N)  # 避免除0
-
     @property
     def child_Q(self):
         return self.child_W / (1 + self.child_N)  # 避免除0
-
-    # @property
-    # def U(self):
-    #     return self.parent.child_U[self.action]
 
     @property
     def child_U(self):
@@ -119,7 +111,7 @@ class NeuronNode:
             self.valid_actions]
 
 
-class DeepMCTS:
+class NeuronMCTS:
     def __init__(self, root_state: np.ndarray, inference_engine, is_self_play=False):
         self.root = NeuronNode(root_state)
         self.infer = inference_engine
@@ -148,7 +140,7 @@ class DeepMCTS:
             # Back Propagation
             node.back_propagate(value)
 
-    def get_pi(self, temperature=1):
+    def get_pi(self, temperature=1.0):
         child_N = self.root.child_N[self.root.valid_actions]
         # 计算已扩展子节点的概率
         if temperature == 0:

@@ -2,6 +2,7 @@ import pygame
 import torch
 
 PIECE_PLACED = pygame.event.custom_type()
+
 CONFIG = {
     'screen_size': (600, 800),
     'color_themes': {

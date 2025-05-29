@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from functions import available_moves, is_win, apply_action
+from functions import is_win, apply_action
 
 
 class Node:

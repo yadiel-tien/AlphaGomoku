@@ -1,14 +1,8 @@
 import numpy as np
 
 
-def softmax(x):
-    probs = np.exp(x - np.max(x))
-    probs /= np.sum(probs)
-    return probs
-
-
 def apply_action(state: np.ndarray, action: int) -> np.ndarray:
-    """执行落子，返回new state"""
+    """执行落子，返回new state。用于模拟"""
     new_state = state.copy()
     row, col = divmod(action, state.shape[1])
     new_state[row, col, 0] = 1
@@ -20,12 +14,12 @@ def is_onboard(i, j, h, w) -> bool:
     return 0 <= i < h and 0 <= j < w
 
 
-def is_win(state: np.ndarray, last_action) -> bool:
+def is_win(state: np.ndarray, action) -> bool:
     """检查落子后是否已经获胜，state是执行落子后的，检查[:,:,1]平面"""
-    if last_action is None:
+    if action is None:
         return False
     h, w, _ = state.shape
-    h0, w0 = divmod(last_action, w)
+    h0, w0 = divmod(action, w)
     for dh, dw in [(1, 0), (1, 1), (0, 1), (-1, 1)]:
         count = 1
         for direction in (-1, 1):
@@ -38,8 +32,3 @@ def is_win(state: np.ndarray, last_action) -> bool:
                 else:
                     break
     return False
-
-
-def available_moves(state: np.ndarray) -> list:
-    board = state[:, :, 0] + state[:, :, 1]
-    return list(map(tuple, np.argwhere(board == 0)))

@@ -6,7 +6,8 @@ from gymnasium import spaces
 import pygame
 
 from constant import BOARD_GRID_SIZE
-from deepMcts import DeepMCTS
+from deepMcts import NeuronMCTS
+from functions import is_win
 from network import Net
 from player import Human, MCTSPlayer, AI, RandomPlayer
 from ui import Button
@@ -25,6 +26,7 @@ class GomokuEnv(gym.Env):
         self.current_player = 0  # 当前走棋方，0代表黑，1代表白
         self.terminated = False
         self.truncated = False
+        self.last_action = None
         self.reset()
 
     def reset(self, seed=None, options=None) -> tuple[np.ndarray, dict]:
@@ -36,54 +38,54 @@ class GomokuEnv(gym.Env):
         self.state = np.zeros(self.shape, dtype=np.float32)
         self.current_player = 0
         self.terminated = False
+        self.last_action = None
         return self.state, {}
 
-    def run(self, players):
+    def run(self, players, silent=False):
         """模拟玩家比赛，玩家1胜返回(1,0)，玩家2胜返回(0,1)，平局返回（0，0）"""
         index = 0
-        last_action = None
-        while True:
-            last_action = players[index].get_action(self, last_action)
-            _, reward, terminated, _, _ = self.step(last_action)
-            if terminated:
-                if reward:
-                    winner = 1 - self.current_player
-                else:
-                    winner = -1
+        for player in players:
+            player.silent = silent
 
-                if winner == 0:
-                    return 1, 0
-                elif winner == 1:
-                    return 0, 1
-                else:
-                    return 0, 0
+        while True:
+            if not silent:
+                print(f'-----player{index + 1}-----')
+
+            action = players[index].get_action(self)
+
+            _, reward, terminated, truncated, _ = self.step(action)
+            if terminated or truncated:
+                return self.get_winner(reward)
 
             index = 1 - index
+
+    def get_winner(self, reward):
+        """确保游戏结束后再调用。(1,0)玩家1胜利，(0,1)玩家2胜利,(0,0)平局"""
+        winner = 1 - self.current_player if reward else -1
+        winner = (1, 0) if winner == 0 else (0, 1) if winner == 1 else (0, 0)
+        return winner
 
     def evaluate(self, players, n_rounds=100):
         """2玩家对弈，打印胜率"""
         outcomes = []
-        for i in range(n_rounds // 2):
+
+        for i in range(n_rounds):
             print(f'第{i + 1}局:', end=' ')
             self.reset()
             for player in players:
                 player.reset()
-            outcome = self.run(players)
-            outcomes.append(outcome)
-            print(outcome)
-        players.reverse()
-        for i in range(n_rounds // 2, n_rounds):
-            print(f'第{i + 1}局:', end=' ')
-            self.reset()
-            for player in players:
-                player.reset()
-            outcome = self.run(players)[::-1]
+            # 改变先手顺序
+            current_players = reversed(players) if i % 2 == 1 else players
+            outcome = self.run(current_players)
+            # 还原对应胜利结果
+            if i % 2 == 1:
+                outcome = reversed(outcome)
             outcomes.append(outcome)
             print(outcome)
 
-        print("Player 1 Win Percentage:", np.round(outcomes.count((1, 0)) / n_rounds, 2))
-        print("Player 2 Win Percentage:", np.round(outcomes.count((0, 1)) / n_rounds, 2))
-        print("Draw Percentage:", np.round(outcomes.count((0, 0)) / n_rounds, 2))
+        print(f"Player 1 Win Percentage:{outcomes.count((1, 0)) / n_rounds:.2%}", )
+        print(f"Player 2 Win Percentage:{outcomes.count((1, 0)) / n_rounds:.2%}")
+        print(f"Draw Percentage:{outcomes.count((1, 0)) / n_rounds:.2%}")
         return outcomes
 
     def valid_actions(self):
@@ -105,17 +107,18 @@ class GomokuEnv(gym.Env):
         # 执行落子
         self.state[row, col, 0] = 1
 
+        # 更改棋盘和当前玩家
+        self.state[:, :, [0, 1]] = self.state[:, :, [1, 0]]
+        self.current_player = 1 - self.current_player
+        self.last_action = action
+
         # 胜利奖励1，平局或未结束奖励0，隐含失败后对手奖励1，通过min-max自己奖励-1
         reward = 0
-        if self._if_win(row, col):
+        if is_win(self.state, action):
             reward = 1
             self.terminated = True
         elif self._is_draw():
             self.terminated = True
-
-        # 更改当前玩家
-        self.state[:, :, [0, 1]] = self.state[:, :, [1, 0]]
-        self.current_player = 1 - self.current_player
 
         return self.state, reward, self.terminated, self.truncated, {}
 
@@ -127,37 +130,8 @@ class GomokuEnv(gym.Env):
         """从动作编号获取坐标 (row, col)"""
         return divmod(move, self.shape[1])
 
-    def _if_win(self, row, col) -> bool:
-        """在落子前检查当前落子是否导致胜利"""
-        direction = [(1, 0), (0, 1), (1, 1), (1, -1)]  # 水平、垂直、主对角线、副对角线
-        for dr, dc in direction:
-            count = 1
-            for delta in (-1, 1):  # 向左或向右
-                for step in range(1, 5):
-                    r, c = row + dr * delta * step, col + dc * delta * step
-                    if self._is_on_board(r, c) and self.state[r, c, 0]:
-                        count += 1
-                        if count > 4:
-                            return True
-                    else:
-                        break
-        return False
-
     def _is_draw(self):
         return np.all(np.logical_or(self.state[:, :, 0], self.state[:, :, 1]))
-
-    def _is_on_board(self, row, col) -> bool:
-        """检查坐标是否在棋盘内"""
-        return 0 <= row < self.shape[0] and 0 <= col < self.shape[1]
-
-    def placed_indices(self) -> np.ndarray:
-        """返回所有已落子位置"""
-        board = self.state[:, :, 0] + self.state[:, :, 1]
-        return np.argwhere(board != 0)
-
-    def valid_indices(self):
-        board = self.state[:, :, 0] + self.state[:, :, 1]
-        return np.argwhere(board == 0)
 
     def render(self) -> None:
         """打印棋盘"""
@@ -186,7 +160,6 @@ class BoardUI:
         self.image = pygame.image.load('graphics/chessBoard.jpeg')
         self.screen = pygame.display.get_surface()
         self.rect = self.image.get_rect(center=self.screen.get_rect().center)
-        self.last_move = None
         self.board = GomokuEnv(rows, columns)
         self.button = Button("Start", self.start, (200, 700), color='green')
         self.status = 'new'  # new playing finished
@@ -205,20 +178,17 @@ class BoardUI:
     def update(self):
         if self.status == 'playing':
             player = self.players[self.board.current_player]
-            if player.pending_move is None:
-                player.update(self.board, self.last_move)
+            if player.pending_action is None:
+                player.update(self.board)
             else:
-                pos = self.board.coordinate2action(*player.pending_move)
-                mark = self.board.current_player
-                self.last_move = player.pending_move + (mark,)
-                new_state, reward, terminated, truncated, _ = self.board.step(pos)
-                player.pending_move = None
-                self.history.append(self.last_move)
+                row, col = self.board.action2coordinate(player.pending_action)
+                self.history.append((row, col, self.board.current_player))
+                new_state, reward, terminated, truncated, _ = self.board.step(player.pending_action)
+                player.pending_action = None
+
                 if terminated or truncated:
-                    if reward == 1:
-                        winner = 'white' if mark else 'black'
-                    else:
-                        winner = 'draw'
+                    winner = self.board.get_winner(reward)
+                    winner = 'black' if winner == (1, 0) else 'white' if winner == (0, 1) else 'draw'
                     self.set_winner(winner)
                 else:
                     self.switch_side()
@@ -368,5 +338,12 @@ class BoardUI:
 if __name__ == '__main__':
     h, w = 9, 9
     env = GomokuEnv(h, w)
-    competitors = [Human((h, w)), AI(model_id=33, iteration=1000)]
-    env.run(competitors)
+    competitors = [Human((h, w)), AI(model_id=291, iteration=1000)]
+    result = env.run(competitors)
+    env.render()
+    if result == (1, 0):
+        print(f'玩家1:{type(competitors[0])}获胜> ')
+    elif result == (0, 1):
+        print(f'玩家2:{type(competitors[1])}获胜')
+    else:
+        print('平局')

@@ -8,7 +8,7 @@ import numpy as np
 from torch import optim
 from board import GomokuEnv
 from config import MODEL_PATH, DEVICE
-from deepMcts import DeepMCTS
+from deepMcts import NeuronMCTS
 from inference import InferenceEngine
 from network import Net
 from player import RandomPlayer, AI
@@ -16,11 +16,52 @@ from replay import ReplayBuffer
 import torch.nn.functional as F
 
 
+def self_play1game(env, infer_engine, n_simulation, temperature):
+    states = []
+    pis = []
+    players = []
+    state, _ = env.reset()
+    mcts = NeuronMCTS(state, infer_engine, is_self_play=True)
+    done = False
+    reward = 0
+
+    while not done:
+        mcts.run(n_simulation)  # 模拟
+        pi = mcts.get_pi(temperature)  # 获取mcts的概率分布pi
+        # 采集数据
+        states.append(np.copy(state))
+        pis.append(np.copy(pi))
+        players.append(env.current_player)
+        # 根据pi来选择动作
+        action = np.random.choice(len(pi), p=pi)
+        state, reward, done, _, _ = env.step(action)  # 执行落子
+        mcts.apply_action(action)  # mcts也要根据action进行对应裁剪
+
+    # 一局结束，获取winner ID（0，1）,平局-1
+    if reward:
+        winner = 1 - env.current_player
+    else:
+        winner = -1
+
+    experiences = []
+    # 根据winner和player的到针对player的比赛结果z，收集数据
+    for state, pi, player in zip(states, pis, players):
+        if winner == player:
+            z = 1
+        elif winner == -1:
+            z = 0
+        else:
+            z = -1
+        experiences.append((state, pi, z))
+
+    return experiences
+
+
 class Trainer:
     def __init__(self, rows, columns, n_workers, best_model_index):
         self.rows, self.columns = rows, columns
         self.model = Net(256, rows * columns).to(DEVICE)
-        self.buffer = ReplayBuffer(30000, 128)
+        self.buffer = ReplayBuffer(100_000, 128)
         self.infer = InferenceEngine(self.model)
         self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
         self.pool = ThreadPoolExecutor(n_workers)
@@ -39,46 +80,12 @@ class Trainer:
     def make_env(self):
         return GomokuEnv(self.rows, self.columns)
 
-    def self_play(self, n_games=1, n_simulation=100, temperature=1):
+    def self_play(self, n_games=1, n_simulation=100, temperature=1.0):
         """自我对弈，收集每步的state，pi，z"""
         dataset = []
         env = self.make_env()
         for i in range(n_games):
-            states = []
-            pis = []
-            players = []
-            state, _ = env.reset()
-            mcts = DeepMCTS(state, self.infer, is_self_play=True)
-            done = False
-            reward = 0
-
-            while not done:
-                mcts.run(n_simulation)  # 模拟
-                pi = mcts.get_pi(temperature)  # 获取mcts的概率分布pi
-                # 采集数据
-                states.append(np.copy(state))
-                pis.append(np.copy(pi))
-                players.append(env.current_player)
-                # 根据pi来选择动作
-                action = np.random.choice(len(pi), p=pi)
-                state, reward, done, _, _ = env.step(action)  # 执行落子
-                mcts.apply_action(action)  # mcts也要根据action进行对应裁剪
-
-            # 一局结束，获取winner ID（0，1）,平局-1
-            if reward:
-                winner = 1 - env.current_player
-            else:
-                winner = -1
-
-            # 根据winner和player的到针对player的比赛结果z，收集数据
-            for state, pi, player in zip(states, pis, players):
-                if winner == player:
-                    z = 1
-                elif winner == -1:
-                    z = 0
-                else:
-                    z = -1
-                dataset.append((state, pi, z))
+            dataset.extend(self_play1game(env, self.infer, n_simulation, temperature))
         return dataset
 
     def fit(self, epochs=100):
@@ -103,6 +110,7 @@ class Trainer:
             loss = policy_loss + value_loss
             self.optimizer.zero_grad()  # 清空旧梯度
             loss.backward()  # 反向传播
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 将梯度范数裁剪到1.0
             self.optimizer.step()  # 更新参数
 
             if (epoch + 1) % 5 == 0 or epoch == 0:
@@ -111,7 +119,7 @@ class Trainer:
                     f"policy_loss={policy_loss.item():.4f}, value_loss={value_loss.item():.4f}"
                 )
 
-    def train(self, epochs=100, total_games=100):
+    def train(self, n_games=100, epochs=100):
         # 根据保存的路径获取开始轮次
         iteration_start = self.best_model_index
 
@@ -121,7 +129,10 @@ class Trainer:
 
             # 多线程并行采集对战数据
             start = time.time()
-            futures = [self.pool.submit(self.self_play, n_simulation=500) for _ in range(total_games)]
+            tao = 1 - i / epochs
+            if tao < 0.1:
+                tao = 0
+            futures = [self.pool.submit(self.self_play, n_simulation=500, temperature=tao) for _ in range(n_games)]
             for f in as_completed(futures):
                 experiences.extend(f.result())
 
@@ -146,7 +157,7 @@ class Trainer:
 
     def eval(self, index):
         futures = []
-        for _ in range(10):
+        for _ in range(1):
             env = self.make_env()
             players = [AI(model_id=index, silent=True), AI(model_id=self.best_model_index, silent=True)]
             futures.append(self.pool.submit(env.evaluate, players, 2))
@@ -168,7 +179,7 @@ class Trainer:
 
 if __name__ == '__main__':
     # 总的轮次
-    trainer = Trainer(9, 9, n_workers=12, best_model_index=0)
+    trainer = Trainer(9, 9, n_workers=12, best_model_index=100)
     # for epoch in range(20):
     #     trainer.load()
     #     trainer.train(total_games=24)
@@ -177,5 +188,8 @@ if __name__ == '__main__':
     #     trainer.eval(index)
     # trainer.shutdown()
     trainer.load()
-    trainer.train(total_games=24)
-    trainer.shutdown()
+    # trainer.train(n_games=24, epochs=300)
+    # trainer.eval(40)
+    # trainer.shutdown()
+    _,_,zs = trainer.buffer.get_batch()
+    print(f'1:{np.count_nonzero(zs==1)},-1:{np.count_nonzero(zs==-1)},0:,{np.count_nonzero(zs==0)}')

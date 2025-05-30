@@ -11,50 +11,9 @@ from config import MODEL_PATH, DEVICE
 from deepMcts import NeuronMCTS
 from inference import InferenceEngine
 from network import Net
-from player import RandomPlayer, AI
+from player import AIServer
 from replay import ReplayBuffer
 import torch.nn.functional as F
-
-
-def self_play1game(env, infer_engine, n_simulation, temperature):
-    states = []
-    pis = []
-    players = []
-    state, _ = env.reset()
-    mcts = NeuronMCTS(state, infer_engine, is_self_play=True)
-    done = False
-    reward = 0
-
-    while not done:
-        mcts.run(n_simulation)  # 模拟
-        pi = mcts.get_pi(temperature)  # 获取mcts的概率分布pi
-        # 采集数据
-        states.append(np.copy(state))
-        pis.append(np.copy(pi))
-        players.append(env.current_player)
-        # 根据pi来选择动作
-        action = np.random.choice(len(pi), p=pi)
-        state, reward, done, _, _ = env.step(action)  # 执行落子
-        mcts.apply_action(action)  # mcts也要根据action进行对应裁剪
-
-    # 一局结束，获取winner ID（0，1）,平局-1
-    if reward:
-        winner = 1 - env.current_player
-    else:
-        winner = -1
-
-    experiences = []
-    # 根据winner和player的到针对player的比赛结果z，收集数据
-    for state, pi, player in zip(states, pis, players):
-        if winner == player:
-            z = 1
-        elif winner == -1:
-            z = 0
-        else:
-            z = -1
-        experiences.append((state, pi, z))
-
-    return experiences
 
 
 class Trainer:
@@ -63,6 +22,7 @@ class Trainer:
         self.model = Net(256, rows * columns).to(DEVICE)
         self.buffer = ReplayBuffer(100_000, 128)
         self.infer = InferenceEngine(self.model)
+        # weight_decay为l2正则
         self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
         self.pool = ThreadPoolExecutor(n_workers)
         self.best_model_index = best_model_index
@@ -80,16 +40,53 @@ class Trainer:
     def make_env(self):
         return GomokuEnv(self.rows, self.columns)
 
-    def self_play(self, n_games=1, n_simulation=100, temperature=1.0):
-        """自我对弈，收集每步的state，pi，z"""
-        dataset = []
+    def self_play1game(self, n_simulation, temperature):
         env = self.make_env()
-        for i in range(n_games):
-            dataset.extend(self_play1game(env, self.infer, n_simulation, temperature))
-        return dataset
+        states, pis, players = [], [], []
+        state, _ = env.reset()
+        mcts = NeuronMCTS(state, self.infer, is_self_play=True)
+        done = False
+        reward = 0
+
+        while not done:
+            mcts.run(n_simulation)  # 模拟
+            pi = mcts.get_pi(temperature)  # 获取mcts的概率分布pi
+            # 采集数据
+            states.append(np.copy(state))
+            pis.append(np.copy(pi))
+            players.append(env.current_player)
+            # 根据pi来选择动作
+            action = np.random.choice(len(pi), p=pi)
+            state, reward, done, _, _ = env.step(action)  # 执行落子
+            mcts.apply_action(state, action)  # mcts也要根据action进行对应裁剪
+
+        # 一局结束，获取winner ID（0，1）,平局-1
+        winner = 1 - env.current_player if reward else -1
+
+        experiences = []
+        # 根据winner和player的到针对player的比赛结果z，收集数据
+        for state, pi, player in zip(states, pis, players):
+            z = 1 if winner == player else 0 if winner == -1 else -1
+            experiences.append((state, pi, z))
+
+        return experiences
+
+    def self_play(self, n_games, n_simulation=100, temperature=1):
+        """自我对弈，收集每步的state，pi，z"""
+        start = time.time()
+        dataset = []
+        futures = [self.pool.submit(self.self_play1game, n_simulation, temperature) for _ in range(n_games)]
+        for f in as_completed(futures):
+            dataset.extend(f.result())
+        for d in dataset:
+            self.buffer.add(*d)
+        duration = time.time() - start
+        print(
+            f'采集到{len(dataset)}原始数据，用时{duration:.2f}秒,平均每个用时数据用时{duration / len(dataset) :.4f}。')
 
     def fit(self, epochs=100):
         """从buffer中获取数据，训练神经网络"""
+        start = time.time()
         for epoch in range(epochs):
             # 批量数据获取，转tensor
             states, pis, zs = self.buffer.get_batch()
@@ -119,77 +116,65 @@ class Trainer:
                     f"policy_loss={policy_loss.item():.4f}, value_loss={value_loss.item():.4f}"
                 )
 
+        duration = time.time() - start
+        print(f"{epochs}轮训练完成，共用时{duration:.2f}秒。")
+
     def train(self, n_games=100, epochs=100):
         # 根据保存的路径获取开始轮次
         iteration_start = self.best_model_index
 
         for i in range(epochs):
-            print(f'Current Iteration:{i + 1},Total Iteration:{iteration_start + i + 1}')
-            experiences = []
+            iteration = iteration_start + i + 1
+            print(f'Current Iteration:{i + 1}/{epochs},Total Iteration:{iteration}')
 
             # 多线程并行采集对战数据
-            start = time.time()
             tao = 1 - i / epochs
             if tao < 0.1:
                 tao = 0
-            futures = [self.pool.submit(self.self_play, n_simulation=500, temperature=tao) for _ in range(n_games)]
-            for f in as_completed(futures):
-                experiences.extend(f.result())
+            self.self_play(n_games, tao)
 
-            duration = time.time() - start
-            print(
-                f'采集到{len(experiences)}原始数据，用时{duration:.2f}秒,平均每个用时数据用时{duration / len(experiences) :.4f}。')
-
-            for experience in experiences:
-                self.buffer.add(*experience)
-
-            # 进行训练，使神经网络学习mcts经验,weight_decay为l2正则
-            start = time.time()
+            # 进行训练
             self.fit(epochs=100)
-            duration = time.time() - start
-            print(f"训练完成，用时{duration:.2f}秒。")
 
-            # 将训练好的参数同步给推理模型
-            self.infer.update_model(self.model)
+            # 评估
+            if i % 10 == 0 and iteration != self.best_model_index:
+                self.eval(iteration)
 
-            # 保存数据，便于以后使用
-            self.save(iteration_start + i + 1)
+        print(f'当前最好模型为{self.best_model_index}')
 
     def eval(self, index):
+        start = time.time()
+        print(f'目前最佳model:{self.best_model_index},待评估model：{index}')
+        to_be_eval = InferenceEngine(self.model)
         futures = []
-        for _ in range(1):
+        for _ in range(20):
             env = self.make_env()
-            players = [AI(model_id=index, silent=True), AI(model_id=self.best_model_index, silent=True)]
-            futures.append(self.pool.submit(env.evaluate, players, 2))
+            players = [AIServer(to_be_eval), AIServer(self.infer)]
+            futures.append(self.pool.submit(env.random_order_play, players, silent=True))
         result = []
         for future in as_completed(futures):
-            result.extend(future.result())
+            result.append(future.result())
         win_rate = result.count((1, 0)) / len(result)
-        print(f"win_rate:{win_rate:.2f}")
+        draw_rate = result.count((0, 0)) / len(result)
+        print(f"win_rate:{win_rate:.2%},draw_rate:{draw_rate:.2%}")
+        duration = time.time() - start
         if win_rate > 0.55:
             self.best_model_index = index
-            print(f'最佳玩家更新为{index}')
+            # 保存模型
+            self.save(index)
+            # 将训练好的参数同步给推理模型
+            self.infer.update_model(self.model)
+            print(f'最佳玩家更新为{index},评估用时:{duration:.2f}秒')
         else:
-            print(f'最佳玩家为更新,仍旧为{self.best_model_index}')
+            print(f'最佳玩家未更新,仍旧为{self.best_model_index},评估用时:{duration:.2f}')
 
-    def shutdown(self):
+    def __del__(self):
         self.pool.shutdown()
-        self.infer.shutdown()
 
 
 if __name__ == '__main__':
     # 总的轮次
     trainer = Trainer(9, 9, n_workers=12, best_model_index=311)
-    # for epoch in range(20):
-    #     trainer.load()
-    #     trainer.train(total_games=24)
-    #     all_file = os.listdir('./data/')
-    #     index = max(int(f.split('_')[-1].split('.')[0]) for f in all_file)
-    #     trainer.eval(index)
-    # trainer.shutdown()
     trainer.load()
-    trainer.train(n_games=24, epochs=300)
-    # trainer.eval(40)
-    trainer.shutdown()
-    # _,_,zs = trainer.buffer.get_batch()
-    # print(f'1:{np.count_nonzero(zs==1)},-1:{np.count_nonzero(zs==-1)},0:,{np.count_nonzero(zs==0)}')
+    trainer.train(n_games=24, epochs=800)
+    # trainer.eval(737)

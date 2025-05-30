@@ -16,6 +16,7 @@ CONFIG = {
     'dirichlet': 0.2
 
 }
-MODEL_PATH = './data/model_30.pt'
+MODEL_PATH = './data/model_311.pt'
 BUFFER_PATH = './data/buffer.pkl'
+BASE_URL = 'http://192.168.0.126:5000/'
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

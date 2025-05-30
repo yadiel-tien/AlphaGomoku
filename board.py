@@ -3,9 +3,10 @@ import re
 import gymnasium as gym
 from gymnasium import spaces
 import pygame
-
+import random
 from constant import BOARD_GRID_SIZE
 from functions import is_win
+from inference import make_engine
 from player import Human, AIServer
 from ui import Button
 import numpy as np
@@ -40,21 +41,23 @@ class GomokuEnv(gym.Env):
 
     def run(self, players, silent=False):
         """模拟玩家比赛，玩家1胜返回(1,0)，玩家2胜返回(0,1)，平局返回（0，0）"""
-        index = 0
+        self.reset()
         for player in players:
             player.silent = silent
+            player.reset()
 
+        index = 0
         while True:
             if not silent:
                 print(f'-----player{index + 1}-----')
 
             action = players[index].get_action(self)
-
             _, reward, terminated, truncated, _ = self.step(action)
             if terminated or truncated:
-                return self.get_winner(reward)
-
+                outcome = self.get_winner(reward)
+                break
             index = 1 - index
+        return outcome
 
     def get_winner(self, reward):
         """确保游戏结束后再调用。(1,0)玩家1胜利，(0,1)玩家2胜利,(0,0)平局"""
@@ -62,27 +65,30 @@ class GomokuEnv(gym.Env):
         winner = (1, 0) if winner == 0 else (0, 1) if winner == 1 else (0, 0)
         return winner
 
+    def random_order_play(self, players, silent=False):
+        """随机一局对弈，先手顺序随机"""
+        n = random.randint(0, 1)
+        p1, p2 = players
+        current_players = [p1, p2] if n == 0 else [p2, p1]
+        a, b = self.run(current_players, silent=silent)
+        if n == 0:
+            return a, b
+        else:
+            return b, a
+
     def evaluate(self, players, n_rounds=100):
         """2玩家对弈，打印胜率"""
         outcomes = []
-
         for i in range(n_rounds):
             print(f'第{i + 1}局:', end=' ')
-            self.reset()
-            for player in players:
-                player.reset()
             # 改变先手顺序
-            current_players = reversed(players) if i % 2 == 1 else players
-            outcome = self.run(current_players)
-            # 还原对应胜利结果
-            if i % 2 == 1:
-                outcome = reversed(outcome)
+            outcome = self.random_order_play(players)
             outcomes.append(outcome)
-            print(outcome)
+            print(f'比赛结果：{outcome}')
 
         print(f"Player 1 Win Percentage:{outcomes.count((1, 0)) / n_rounds:.2%}", )
-        print(f"Player 2 Win Percentage:{outcomes.count((1, 0)) / n_rounds:.2%}")
-        print(f"Draw Percentage:{outcomes.count((1, 0)) / n_rounds:.2%}")
+        print(f"Player 2 Win Percentage:{outcomes.count((0, 1)) / n_rounds:.2%}")
+        print(f"Draw Percentage:{outcomes.count((0, 0)) / n_rounds:.2%}")
         return outcomes
 
     def valid_actions(self):
@@ -335,7 +341,8 @@ class BoardUI:
 if __name__ == '__main__':
     h, w = 9, 9
     env = GomokuEnv(h, w)
-    competitors = [Human((h, w)), AIServer(model_id=291, iteration=1000)]
+    infer1, infer2 = make_engine(311), make_engine(737)
+    competitors = [AIServer(infer1), AIServer(infer2)]
     result = env.run(competitors)
     env.render()
     if result == (1, 0):

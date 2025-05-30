@@ -8,7 +8,7 @@ import requests
 import pygame
 import torch
 
-from config import MODEL_PATH, DEVICE
+from config import MODEL_PATH, DEVICE, BASE_URL
 from constant import BOARD_GRID_SIZE
 from deepMcts import NeuronMCTS
 from functions import is_onboard
@@ -74,7 +74,7 @@ class Human(Player):
         while True:
             while True:
                 txt = input('输入落子位置坐标，示例"1,2"代表第1行第2列:')
-                txt.replace('，', ',')
+                txt = txt.replace('，', ',')
                 pos = txt.split(',')
                 if len(pos) == 2 and type(pos) is list and pos[0].isdigit() and pos[1].isdigit():
                     break
@@ -113,57 +113,60 @@ class Human(Player):
 
 
 class AIClient(Player):
-    def __init__(self):
+    def __init__(self, player_idx, model_idx):
         super().__init__()
-        self._thread = None
+        self.player_idx = player_idx
+        self.model_idx = model_idx
+        self.request_setup()
 
     def update(self, env):
         if not self._thinking:
             # 新线程运行MCTS
             self._thinking = True
-            self._thread = threading.Thread(target=self.request_move, args=(env.state, env.last_action))
-            self._thread.start()
+            threading.Thread(target=self.request_move, args=(env.state, env.last_action)).start()
 
     def request_move(self, state, last_action):
-        try:
-            url = 'http://192.168.0.126:5000/make_move'
-            headers = {'content-type': 'application/json'}
-            payload = {
-                'state': state.tolist(),
-                'last_action': int(last_action)
-            }
-            response = requests.post(url, data=json.dumps(payload), headers=headers)
-            response.raise_for_status()  # 检查http错误
-            response = response.json()
+        url = BASE_URL + 'make_move'
+        payload = {
+            'state': state.tolist(),
+            'last_action': last_action,
+            'player_idx': self.player_idx
+        }
+        response = self.post_request(url, payload)
 
-            self.pending_action = response.get('action')
-            self._thinking = False
-
-        except requests.exceptions.RequestException as e:
-            print(f'发生错误：{e}')
+        self.pending_action = response.get('action')
+        self._thinking = False
 
     def request_reset(self):
+        url = BASE_URL + 'reset'
+        payload = {'player_idx': self.player_idx}
+        threading.Thread(target=self.post_request, args=(url, payload)).start()
+
+    def request_setup(self):
+        url = BASE_URL + 'setup'
+        payload = {'player_idx': self.player_idx, 'model_idx': self.model_idx}
+        threading.Thread(target=self.post_request, args=(url, payload)).start()
+
+    def post_request(self, url, payload):
         try:
-            url = 'http://192.168.0.126:5000/reset'
-            response = requests.get(url)
+            headers = {'content-type': 'application/json'}
+            response = requests.post(url, data=json.dumps(payload), headers=headers)
             response.raise_for_status()
+            return response.json()
         except requests.exceptions.RequestException as e:
             print(f'发生错误：{e}')
+        return None
 
     def reset(self):
-        self._thread = threading.Thread(target=self.request_reset)
-        self._thread.start()
+        self.request_reset()
         super().reset()
 
 
 class AIServer(Player):
-    def __init__(self, shape, model_id, iteration=1000, silent=False):
+    def __init__(self, infer_engine, n_simulation=500, silent=False):
         super().__init__()
-        model = Net(256, shape[0] * shape[1]).to(DEVICE)
-        path = f'./data/model_{model_id}.pt'
-        model.load_state_dict(torch.load(path))
-        self.infer = InferenceEngine(model)
-        self._iteration = iteration
+        self.infer = infer_engine
+        self._n_simulation = n_simulation
         self.mcts = None
         self.silent = silent
 
@@ -181,7 +184,7 @@ class AIServer(Player):
             self.mcts = NeuronMCTS(state, self.infer)
         else:
             self.mcts.apply_action(state, last_action)
-        self.mcts.run(self._iteration)
+        self.mcts.run(self._n_simulation)
         self.pending_action = self.mcts.choose_action()
         self._thinking = False
 
@@ -191,11 +194,11 @@ class AIServer(Player):
 
 
 class MCTSPlayer(Player):
-    def __init__(self, iteration=1000):
+    def __init__(self, n_simulation=1000):
         super().__init__()
         self.mcts = None
         self._thread = None
-        self._iteration = iteration
+        self._n_simulation = n_simulation
 
     def get_action(self, env):
         print('思考中...')
@@ -217,7 +220,7 @@ class MCTSPlayer(Player):
         else:
             self.mcts.apply_opponent_action(state, last_action)
         # start = time.time()
-        self.mcts.run(self._iteration)
+        self.mcts.run(self._n_simulation)
         # print(f'{self._iteration} iteration took {time.time() - start:.2f} seconds')
         self.pending_action = self.mcts.choose_action()
         self._thinking = False

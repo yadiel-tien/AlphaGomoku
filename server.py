@@ -1,45 +1,64 @@
 import numpy as np
+import torch
 from flask import Flask, request, jsonify
 
+from inference import make_engine
 from player import AIServer
 
 app = Flask(__name__)
-ai = None
+AIes = [None, None]
 
 
+@app.route('/setup', methods=['POST'])
 def setup():
-    global ai
-    ai = AIServer((9, 9), model_id=310, iteration=1600)
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON data"}), 400
+    try:
+        player_idx = int(data['player_idx'])
+        model_idx = int(data['model_idx'])
+    except Exception as e:
+        return jsonify({"error": f'Failed to parse input:{e}'}), 400
 
-
-with app.app_context():
-    setup()
+    infer = make_engine(model_idx)
+    AIes[player_idx] = AIServer(infer)
+    return jsonify({"status": "success"})
 
 
 @app.route('/make_move', methods=['POST'])
 def make_move():
-    global ai
     data = request.get_json()
     if not data:
         return jsonify({"error": "Invalid JSON data"}), 400
 
     try:
         state = np.array(data['state'], dtype=np.float32)
-        last_action = int(data['last_action'])
+        last_action = data['last_action']
+        if last_action is not None:
+            last_action = int(last_action)
+        player_idx = int(data['player_idx'])
 
     except Exception as e:
         return jsonify({"error": f'Failed to parse input:{e}'}), 400
 
-    ai.run_mcts(state, last_action)
+    AIes[player_idx].run_mcts(state, last_action)
 
-    return jsonify({"action": int(ai.pending_action)})
+    return jsonify({"action": int(AIes[player_idx].pending_action)})
 
 
-@app.route('/reset', methods=['GET'])
+@app.route('/reset', methods=['POST'])
 def reset():
-    global ai
-    if ai:
-        ai.reset()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON data"}), 400
+
+    try:
+        player_idx = int(data['player_idx'])
+
+    except Exception as e:
+        return jsonify({"error": f'Failed to parse input:{e}'}), 400
+    if AIes[player_idx] is not None:
+        AIes[player_idx].reset()
     return jsonify({"status": 'success'})
 
 

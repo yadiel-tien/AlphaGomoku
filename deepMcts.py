@@ -5,11 +5,7 @@ from functions import apply_action, is_win
 
 
 class DummyNode(object):
-    """A fake node of a MCTS search tree.
-
-    This node is intended to be a placeholder for the root node, which would
-    otherwise have no parent node. If all nodes have parents, code becomes
-    simpler."""
+    """作为根节点的父节点使用，简化逻辑"""
 
     def __init__(self):
         self.parent = None
@@ -18,7 +14,7 @@ class DummyNode(object):
 
 
 class NeuronNode:
-    def __init__(self, state, last_action=None, parent=None, c_puct=3):
+    def __init__(self, state, last_action=None, parent=None, c_puct=2):
         self.state = state
         self.last_action = last_action
         self.parent = parent if parent else DummyNode()
@@ -79,16 +75,16 @@ class NeuronNode:
         action = self.valid_actions[index]
         return self.get_child(action)
 
-    def evaluate(self, inference_engine, add_noise):
+    def evaluate(self, inference_engine, is_self_play=False):
         if is_win(self.state, self.last_action):
             return 1.0
         elif len(self.valid_actions) == 0:
             return 0.0
 
-        policy, value = inference_engine.request(self.state)
+        policy, value = inference_engine.request(self.state, is_self_play)
         self.child_P = policy
         # 只在根节点添加噪声
-        if add_noise and isinstance(self.parent, DummyNode):
+        if is_self_play and isinstance(self.parent, DummyNode):
             self.inject_noise()
         self.is_expanded = True
         return value
@@ -126,10 +122,8 @@ class NeuronMCTS:
     def apply_action(self, state, last_action):
         node = self.root.get_child(last_action)
         if node is None or not np.array_equal(node.state, state):
-            print('new node')
             self.root = NeuronNode(state, last_action)
         else:
-            print('found node')
             self.root = node
             self.root.parent = DummyNode()
 
@@ -141,7 +135,7 @@ class NeuronMCTS:
                 node = node.select()
 
             # Evaluation
-            value = node.evaluate(self.infer, add_noise=self.is_self_play)
+            value = node.evaluate(self.infer, is_self_play=self.is_self_play)
 
             # Back Propagation
             node.back_propagate(value)

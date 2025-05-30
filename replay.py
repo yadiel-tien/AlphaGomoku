@@ -6,6 +6,7 @@ import random
 import numpy as np
 
 from config import BUFFER_PATH
+from functions import apply_symmetry
 
 
 class ReplayBuffer:
@@ -21,15 +22,11 @@ class ReplayBuffer:
     def augment_data(self, state, mcts_prob, winner):
         """通过旋转和翻转棋盘进行数据增强"""
         augmented_samples = []
-        for i in range(4):  # 旋转 0°, 90°, 180°, 270°
-            rotated_state = np.rot90(state, k=i, axes=(0, 1))
-            rotated_prob = np.rot90(mcts_prob.reshape(state.shape[:2]), k=i, axes=(0, 1)).flatten()
-            augmented_samples.append((rotated_state, rotated_prob, winner))
-
-            for j in range(2):
-                flipped_state = np.flip(rotated_state, axis=j)  # 水平翻转
-                flipped_prob = np.flip(rotated_prob.reshape(state.shape[:2]), axis=j).flatten()
-                augmented_samples.append((flipped_state, flipped_prob, winner))
+        shape = state.shape[:2]
+        for i in range(8):
+            transformed_state = apply_symmetry(state, i, shape)
+            transformed_prob = apply_symmetry(mcts_prob, i, shape)
+            augmented_samples.append((transformed_state, transformed_prob, winner))
 
         return augmented_samples
 

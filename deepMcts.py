@@ -14,7 +14,7 @@ class DummyNode(object):
 
 
 class NeuronNode:
-    def __init__(self, state, last_action=None, parent=None, c_puct=2):
+    def __init__(self, state, last_action=None, parent=None, c_puct=3):
         self.state = state
         self.last_action = last_action
         self.parent = parent if parent else DummyNode()

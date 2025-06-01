@@ -140,12 +140,12 @@ class AIClient(Player):
     def request_reset(self):
         url = BASE_URL + 'reset'
         payload = {'player_idx': self.player_idx}
-        threading.Thread(target=self.post_request, args=(url, payload)).start()
+        threading.Thread(target=self.post_request, args=(url, payload),name='request reset').start()
 
     def request_setup(self):
         url = BASE_URL + 'setup'
         payload = {'player_idx': self.player_idx, 'model_idx': self.model_idx}
-        threading.Thread(target=self.post_request, args=(url, payload)).start()
+        threading.Thread(target=self.post_request, args=(url, payload),name='request setup').start()
 
     def post_request(self, url, payload):
         try:
@@ -181,6 +181,7 @@ class AIServer(Player):
 
     def run_mcts(self, state, last_action):
         if self.mcts is None:
+            self.infer.start()
             self.mcts = NeuronMCTS(state, self.infer)
         else:
             self.mcts.apply_action(state, last_action)
@@ -211,7 +212,8 @@ class MCTSPlayer(Player):
         if not self._thinking:
             # 新线程运行MCTS
             self._thinking = True
-            self._thread = threading.Thread(target=self._run_mcts, args=(env.state.copy(), env.last_action))
+            self._thread = threading.Thread(target=self._run_mcts, args=(env.state.copy(), env.last_action),
+                                            name='MCTS run')
             self._thread.start()
 
     def _run_mcts(self, state, last_action):

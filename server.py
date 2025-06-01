@@ -38,12 +38,11 @@ def make_move():
             last_action = int(last_action)
         player_idx = int(data['player_idx'])
 
+        AIes[player_idx].run_mcts(state, last_action)
+        action = int(AIes[player_idx].pending_action)
+        return jsonify({"action": action})
     except Exception as e:
         return jsonify({"error": f'Failed to parse input:{e}'}), 400
-
-    AIes[player_idx].run_mcts(state, last_action)
-
-    return jsonify({"action": int(AIes[player_idx].pending_action)})
 
 
 @app.route('/reset', methods=['POST'])
@@ -54,12 +53,13 @@ def reset():
 
     try:
         player_idx = int(data['player_idx'])
-
+        if AIes[player_idx] is not None:
+            AIes[player_idx].reset()
+            return jsonify({"status": 'success'})
+        else:
+            return jsonify({"error": "Player have not been setup"}), 400
     except Exception as e:
         return jsonify({"error": f'Failed to parse input:{e}'}), 400
-    if AIes[player_idx] is not None:
-        AIes[player_idx].reset()
-    return jsonify({"status": 'success'})
 
 
 if __name__ == '__main__':

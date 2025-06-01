@@ -351,3 +351,5 @@ if __name__ == '__main__':
         print(f'玩家2:{type(competitors[1])}获胜')
     else:
         print('平局')
+    infer1.shutdown()
+    infer2.shutdown()

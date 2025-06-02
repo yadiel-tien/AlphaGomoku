@@ -295,8 +295,10 @@ class BoardUI:
                 timer.reset()
         self.history = []
         self.status = 'playing'
+        # 交换玩家
+        self.players.reverse()
         # 重设玩家
-        for player in self.players.values():
+        for player in self.players:
             player.reset()
         # 当前玩家开始计时
         self.players[self.board.current_player].is_active = True

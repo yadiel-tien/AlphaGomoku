@@ -30,9 +30,15 @@ class ReplayBuffer:
 
         return augmented_samples
 
-    def get_batch(self):
+    def get_batch(self, min_win_ratio=0):
         """随机采样一个 batch 进行训练"""
-        batch = random.sample(self.buffer, min(self.batch_size, len(self.buffer)))
+        win_data = [d for d in self.buffer if d[2] == 1]
+        n_win = int(self.batch_size * min_win_ratio)
+        win_batch = random.sample(win_data, min(n_win, len(win_data)))
+        other_batch = random.sample(self.buffer, self.batch_size - n_win)
+        batch = win_batch + other_batch
+        if len(batch) < self.batch_size:
+            print(f'batch size too small,{len(batch)}collected')
         states, probs, winners = zip(*batch)  # [B,H,W,2],[B,H*W],[B],第一个维度是tuple，需转为ndarray
         states = np.transpose(np.array(states), (0, 3, 1, 2))  # [B,H,W,2]->[B,2,H,W]
         return states, np.array(probs), np.array(winners, dtype=np.float32)

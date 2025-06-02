@@ -29,12 +29,12 @@ class Trainer:
     def __init__(self, rows, columns, n_workers, best_model_index):
         self.rows, self.columns = rows, columns
         self.model = Net(256, rows * columns).to(DEVICE)
-        self.buffer = ReplayBuffer(100_000, 128)
+        self.buffer = ReplayBuffer(200_000, 128)
         self.latest_infer = InferenceEngine(self.model)
         self.best_infer = make_engine(best_model_index)
         # weight_decay为l2正则
         self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
-        self.pool = ThreadPoolExecutor(n_workers,thread_name_prefix='trainer-')
+        self.pool = ThreadPoolExecutor(n_workers, thread_name_prefix='trainer-')
         self.best_model_index = best_model_index
         self.logger = logging.getLogger('trainer')
         self.eval_logger = logging.getLogger('eval')
@@ -61,7 +61,7 @@ class Trainer:
         step = 0
 
         while not done:
-            temperature = 0 if step > 5 else 1  # 前几步鼓励探索
+            temperature = 0 if step >= 5 else 1  # 前几步鼓励探索
             mcts.run(n_simulation)  # 模拟
             pi = mcts.get_pi(temperature)  # 获取mcts的概率分布pi
             # 采集数据
@@ -89,8 +89,14 @@ class Trainer:
         start = time.time()
         dataset = []
         futures = [self.pool.submit(self.self_play1game, n_simulation) for _ in range(n_games)]
+        z_sample = []
         for f in as_completed(futures):
+            z_sample.append(f.result()[0][2])
             dataset.extend(f.result())
+        win_count = z_sample.count(1) + z_sample.count(-1)
+        draw_count = z_sample.count(-0.1)
+        self.play_logger.info(
+            f'self playing {n_games} games,win:{win_count / n_games:.2%},draw:{draw_count / n_games:.2%}')
         for d in dataset:
             self.buffer.add(*d)
         duration = time.time() - start
@@ -103,7 +109,7 @@ class Trainer:
         start = time.time()
         for epoch in range(epochs):
             # 批量数据获取，转tensor
-            states, pis, zs = self.buffer.get_batch()
+            states, pis, zs = self.buffer.get_batch(min_win_ratio=0.5)
             states = torch.from_numpy(states).to(DEVICE)  # 【B，2,H,W]
             pis = torch.from_numpy(pis).to(DEVICE)  # [B,H*W]
             zs = torch.from_numpy(zs).to(DEVICE)  # [B]
@@ -138,7 +144,8 @@ class Trainer:
         iteration_start = self.best_model_index
         for i in range(epochs):
             iteration = iteration_start + i + 1
-            self.logger.info(f'Current Iteration:{i + 1}/{epochs},Total Iteration:{iteration}，当前最佳模型{self.best_model_index}。')
+            self.logger.info(
+                f'Current Iteration:{i + 1}/{epochs},Total Iteration:{iteration}，Best Model Index:{self.best_model_index}。')
 
             # 多线程并行采集对战数据
             self.self_play(n_games, n_simulation)
@@ -193,7 +200,7 @@ class Trainer:
 
 if __name__ == '__main__':
     # 总的轮次
-    trainer = Trainer(9, 9, n_workers=12, best_model_index=899)
+    trainer = Trainer(9, 9, n_workers=12, best_model_index=979)
     trainer.load()
     trainer.train(n_games=24, epochs=2000)
     # trainer.eval(313)

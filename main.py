@@ -13,7 +13,9 @@ class Game:
         self.screen = pygame.display.set_mode(CONFIG['screen_size'])
         pygame.display.set_caption("五子棋")
         h, w = 9, 9
-        players = {0: Human((h, w)), 1: AIClient(1, 899)}
+
+        players = [Human((h, w)), AIClient(1, 1154)]
+
         self.board = BoardUI(h, w, players)
 
     def play(self):

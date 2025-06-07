@@ -4,6 +4,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import pygame
 import random
+
+from config import CONFIG
 from constant import BOARD_GRID_SIZE
 from functions import is_win
 from inference import make_engine
@@ -309,8 +311,8 @@ class BoardUI:
         white_sec = self.timers[1].remain // 1000
         black_sec = self.timers[0].remain // 1000
         font = pygame.font.Font(None, 60)
-        white = font.render(f'White:{white_sec:02}', True, 'orange')
-        black = font.render(f'Black:{black_sec:02}', True, 'orange')
+        white = font.render(f'{self.players[1].description}  White:{white_sec:02}', True, 'orange')
+        black = font.render(f'{self.players[0].description} Black:{black_sec:02}', True, 'orange')
         white_rect = white.get_rect(midleft=(60, 60))
         black_rect = black.get_rect(midleft=(60, 740))
         self.screen.blit(white, white_rect.topleft)
@@ -341,7 +343,7 @@ class BoardUI:
 
 
 if __name__ == '__main__':
-    h, w = 9, 9
+    h, w = CONFIG['board_shape']
     env = GomokuEnv(h, w)
     infer1, infer2 = make_engine(311), make_engine(737)
     competitors = [AIServer(infer1), AIServer(infer2)]

@@ -25,9 +25,9 @@ def is_win(state: np.ndarray, action) -> bool:
         for direction in (-1, 1):
             for step in range(1, 5):
                 i, j = h0 + step * dh * direction, w0 + step * dw * direction
-                if is_onboard(i, j, h, w) and state[i, j, 1]:
+                if 0 <= i < h and 0 <= j < w and state[i, j, 1]:
                     count += 1
-                    if count > 4:
+                    if count == 5:
                         return True
                 else:
                     break

@@ -17,11 +17,12 @@ def setup():
     try:
         player_idx = int(data['player_idx'])
         model_idx = int(data['model_idx'])
+        infer = make_engine(model_idx)
+        AIes[player_idx] = AIServer(infer, 1000)
     except Exception as e:
+        print(f'Failed to setup AI: {e}')
         return jsonify({"error": f'Failed to parse input:{e}'}), 400
 
-    infer = make_engine(model_idx)
-    AIes[player_idx] = AIServer(infer)
     return jsonify({"status": "success"})
 
 

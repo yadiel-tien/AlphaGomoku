@@ -13,10 +13,12 @@ CONFIG = {
         'grey': ['#6c757d', '#5a6268', '#343a40', '#5a6268'],
         'black': ['#000000', '#333333', '#555555', '#333333']
     },
-    'dirichlet': 0.2
-
+    'dirichlet': 0.2,
+    'buffer_path': './data/buffer.pkl',
+    'win_buffer_path': './data/win_buffer.pkl',
+    'base_url': 'http://192.168.0.126:5000/',
+    'MODEL_PATH': './data/model_311.pt',
+    'device': torch.device('cuda:0' if torch.cuda.is_available() else 'cpu'),
+    'best_index_path': './data/best_index.pkl',
+    'board_shape': (15, 15),
 }
-MODEL_PATH = './data/model_311.pt'
-BUFFER_PATH = './data/buffer.pkl'
-BASE_URL = 'http://192.168.0.126:5000/'
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

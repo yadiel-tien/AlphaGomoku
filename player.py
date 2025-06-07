@@ -1,4 +1,3 @@
-import asyncio
 import json
 import threading
 import random
@@ -8,7 +7,7 @@ import requests
 import pygame
 import torch
 
-from config import MODEL_PATH, DEVICE, BASE_URL
+from config import CONFIG
 from constant import BOARD_GRID_SIZE
 from deepMcts import NeuronMCTS
 from functions import is_onboard
@@ -22,6 +21,7 @@ class Player:
         self.is_active = False
         self.pending_action = None
         self._thinking = False
+        self.description = 'Player'
 
     def handle_input(self, event):
         pass
@@ -49,6 +49,7 @@ class Human(Player):
         self.cursor_pos = -1, -1
         self.rows, self.columns = shape
         self.center_x, self.center_y = None, None
+        self.description = 'Human'
 
     def handle_input(self, event):
         if self.is_active:
@@ -118,6 +119,7 @@ class AIClient(Player):
         self.player_idx = player_idx
         self.model_idx = model_idx
         self.request_setup()
+        self.description = f'AI({model_idx})'
 
     def update(self, env):
         if not self._thinking:
@@ -126,7 +128,7 @@ class AIClient(Player):
             threading.Thread(target=self.request_move, args=(env.state, env.last_action)).start()
 
     def request_move(self, state, last_action):
-        url = BASE_URL + 'make_move'
+        url = CONFIG['base_url'] + 'make_move'
         payload = {
             'state': state.tolist(),
             'last_action': last_action,
@@ -138,14 +140,18 @@ class AIClient(Player):
         self._thinking = False
 
     def request_reset(self):
-        url = BASE_URL + 'reset'
+        url = CONFIG['base_url'] + 'reset'
         payload = {'player_idx': self.player_idx}
-        threading.Thread(target=self.post_request, args=(url, payload),name='request reset').start()
+        t = (threading.Thread(target=self.post_request, args=(url, payload), name='request reset'))
+        t.start()
+        t.join()
 
     def request_setup(self):
-        url = BASE_URL + 'setup'
+        url = CONFIG['base_url'] + 'setup'
         payload = {'player_idx': self.player_idx, 'model_idx': self.model_idx}
-        threading.Thread(target=self.post_request, args=(url, payload),name='request setup').start()
+        t = threading.Thread(target=self.post_request, args=(url, payload), name='request setup')
+        t.start()
+        t.join()
 
     def post_request(self, url, payload):
         try:
@@ -169,6 +175,7 @@ class AIServer(Player):
         self._n_simulation = n_simulation
         self.mcts = None
         self.silent = silent
+        self.description = 'Server'
 
     def get_action(self, env):
         if not self.silent:
@@ -200,6 +207,7 @@ class MCTSPlayer(Player):
         self.mcts = None
         self._thread = None
         self._n_simulation = n_simulation
+        self.description = 'MCTS'
 
     def get_action(self, env):
         print('思考中...')

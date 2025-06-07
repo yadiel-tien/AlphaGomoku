@@ -5,19 +5,22 @@ import random
 
 import numpy as np
 
-from config import BUFFER_PATH
+from config import CONFIG
 from functions import apply_symmetry
 
 
 class ReplayBuffer:
     def __init__(self, buffer_size, batch_size):
         self.buffer = deque(maxlen=buffer_size)
+        self.win_buffer = deque(maxlen=buffer_size)
         self.batch_size = batch_size
 
     def add(self, state, mcts_prob, winner):
         """添加数据并进行数据增强"""
         augmented_data = self.augment_data(state, mcts_prob, winner)
         self.buffer.extend(augmented_data)
+        if winner != 0:
+            self.win_buffer.extend(augmented_data)
 
     def augment_data(self, state, mcts_prob, winner):
         """通过旋转和翻转棋盘进行数据增强"""
@@ -32,25 +35,32 @@ class ReplayBuffer:
 
     def get_batch(self, min_win_ratio=0):
         """随机采样一个 batch 进行训练"""
-        win_data = [d for d in self.buffer if d[2] == 1]
         n_win = int(self.batch_size * min_win_ratio)
-        win_batch = random.sample(win_data, min(n_win, len(win_data)))
+        win_batch = random.sample(self.win_buffer, n_win)
         other_batch = random.sample(self.buffer, self.batch_size - n_win)
         batch = win_batch + other_batch
-        if len(batch) < self.batch_size:
-            print(f'batch size too small,{len(batch)}collected')
         states, probs, winners = zip(*batch)  # [B,H,W,2],[B,H*W],[B],第一个维度是tuple，需转为ndarray
         states = np.transpose(np.array(states), (0, 3, 1, 2))  # [B,H,W,2]->[B,2,H,W]
         return states, np.array(probs), np.array(winners, dtype=np.float32)
 
-    def save(self, path=BUFFER_PATH):
+    def save(self, name=None):
+        path = CONFIG['buffer_path'] if name is None else f'./data/{name}.pkl'
+        win_path = CONFIG['win_buffer_path'] if name is None else f'./data/win_{name}.pkl'
+
         with open(path, "wb") as f:
             pickle.dump(self.buffer, f)
+        with open(win_path, "wb") as f:
+            pickle.dump(self.win_buffer, f)
 
-    def load(self, path=BUFFER_PATH):
+    def load(self, name=None):
+        path = CONFIG['buffer_path'] if name is None else f'./data/{name}.pkl'
+        win_path = CONFIG['win_buffer_path'] if name is None else f'./data/win_{name}.pkl'
         if os.path.exists(path):
             with open(path, "rb") as f:
                 self.buffer = pickle.load(f)
+        if os.path.exists(win_path):
+            with open(win_path, "rb") as f:
+                self.win_buffer = pickle.load(f)
 
     def __len__(self):
         return len(self.buffer)

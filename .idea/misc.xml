@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="Black">
-    <option name="sdkName" value="Remote Python 3.13.2 (sftp://bigger@192.168.0.126:22/home/bigger/anaconda3/envs/fiveInARow/bin/python)" />
-  </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Remote Python 3.13.2 (sftp://bigger@192.168.0.126:22/home/bigger/anaconda3/envs/connectx/bin/python) (2)" project-jdk-type="Python SDK" />
-</project>

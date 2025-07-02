@@ -2,21 +2,19 @@ import sys
 
 import pygame
 
-from board import BoardUI
-from config import CONFIG
+from gomoku import GomokuUI
+from config import SETTINGS
 from player import Human, AIClient
-from train import read_best_index
 
 
 class Game:
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode(CONFIG['screen_size'])
+        self.screen = pygame.display.set_mode(SETTINGS['screen_size'])
         pygame.display.set_caption("五子棋")
-        h, w = CONFIG['board_shape']
-        players = [AIClient(0,30), AIClient(1, 90)]
+        players = [Human(), AIClient(1,354)]
 
-        self.board = BoardUI(h, w, players)
+        self.board = GomokuUI(players=players)
 
     def play(self):
         running = True

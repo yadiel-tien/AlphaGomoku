@@ -1,7 +1,10 @@
 import collections
+import copy
+from typing import Self
 
 import numpy as np
-from functions import apply_action, is_win
+
+from inference import request_mp_infer
 
 
 class DummyNode(object):
@@ -14,36 +17,35 @@ class DummyNode(object):
 
 
 class NeuronNode:
-    def __init__(self, state, last_action=None, parent=None, c_puct=3):
-        self.state = state
-        self.last_action = last_action
+    def __init__(self, env, parent: Self = None, c_puct=3.5):
+        self.env = copy.deepcopy(env)
         self.parent = parent if parent else DummyNode()
         self.children = {}
-        self.child_N = np.zeros(state.shape[0] * state.shape[1], dtype=np.float32)  # 访问次数
-        self.child_W = np.zeros(state.shape[0] * state.shape[1], dtype=np.float32)  # 累计价值
-        self.child_P = np.zeros(state.shape[0] * state.shape[1], dtype=np.float32)  # 先验概率
+        self.child_N = np.zeros(env.action_space.n, dtype=np.float32)  # 访问次数
+        self.child_W = np.zeros(env.action_space.n, dtype=np.float32)  # 累计价值
+        self.child_P = np.zeros(env.action_space.n, dtype=np.float32)  # 先验概率
         self.is_expanded = False
         self.c_puct = c_puct
-        self.valid_actions = np.flatnonzero((state[:, :, 0] + state[:, :, 1]) == 0)
+        self.valid_actions = env.valid_actions()
 
     def __repr__(self):
-        return f'NeuronNode(action={self.last_action},N={self.N},W={self.W:.2f})'
+        return f'NeuronNode(action={self.env.last_action},N={self.N},W={self.W:.2f})'
 
     @property
     def N(self):
-        return self.parent.child_N[self.last_action]
+        return self.parent.child_N[self.env.last_action]
 
     @N.setter
     def N(self, value):
-        self.parent.child_N[self.last_action] = value
+        self.parent.child_N[self.env.last_action] = value
 
     @property
     def W(self):
-        return self.parent.child_W[self.last_action]
+        return self.parent.child_W[self.env.last_action]
 
     @W.setter
     def W(self, value):
-        self.parent.child_W[self.last_action] = value
+        self.parent.child_W[self.env.last_action] = value
 
     @property
     def child_Q(self):
@@ -60,28 +62,29 @@ class NeuronNode:
     def get_child(self, action):
         if action in self.valid_actions:
             if action not in self.children:  # 扩展真正节点
-                new_state = apply_action(self.state, action)
+                new_env = copy.deepcopy(self.env)
+                new_env.step(action)
                 self.children[action] = NeuronNode(
-                    new_state,
-                    last_action=action,
+                    env=new_env,
                     parent=self
                 )
             return self.children[action]
-
-        return None
+        raise ValueError('Invalid action')
 
     def select(self):
         index = np.argmax(self.child_scores[self.valid_actions])
         action = self.valid_actions[index]
         return self.get_child(action)
 
-    def evaluate(self, inference_engine, is_self_play=False):
-        if is_win(self.state, self.last_action):
+    def evaluate(self, req_q, is_self_play=False):
+        if self.env.winner == 1 - self.env.current_player:
             return 1.0
-        elif len(self.valid_actions) == 0:
+        elif self.env.winner == self.env.current_player:
+            return -1.0
+        elif self.env.winner == -1:
             return 0.0
 
-        policy, value = inference_engine.request(self.state, is_self_play)
+        policy, value = request_mp_infer(self.env.state, req_q)
         self.child_P = policy
         # 只在根节点添加噪声
         if is_self_play and isinstance(self.parent, DummyNode):
@@ -108,9 +111,9 @@ class NeuronNode:
 
 
 class NeuronMCTS:
-    def __init__(self, root_state, inference_engine, last_action=None, is_self_play=False):
-        self.root = NeuronNode(root_state, last_action)
-        self.infer = inference_engine
+    def __init__(self, env, req_q, is_self_play=False):
+        self.root = NeuronNode(env)
+        self.req_q = req_q
         self.is_self_play = is_self_play
 
     def choose_action(self):
@@ -119,23 +122,23 @@ class NeuronMCTS:
         self.root.parent = DummyNode()
         return action
 
-    def apply_action(self, state, last_action):
-        node = self.root.get_child(last_action)
-        if node is None or not np.array_equal(node.state, state):
-            self.root = NeuronNode(state, last_action)
+    def apply_action(self, env):
+        node = self.root.get_child(env.last_action)
+        if node is None or not np.array_equal(node.env.state, env.state):
+            self.root = NeuronNode(env)
         else:
             self.root = node
             self.root.parent = DummyNode()
 
-    def run(self, iteration=1000):
-        for _ in range(iteration):
+    def run(self, n_simulation=1000):
+        for _ in range(n_simulation):
             node = self.root
             # selection & Expansion
             while node.is_expanded:
                 node = node.select()
 
             # Evaluation
-            value = node.evaluate(self.infer, is_self_play=self.is_self_play)
+            value = node.evaluate(self.req_q, is_self_play=self.is_self_play)
 
             # Back Propagation
             node.back_propagate(value)

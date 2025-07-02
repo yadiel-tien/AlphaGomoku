@@ -18,6 +18,7 @@ class Timer:
             self.remain = self.limit - pygame.time.get_ticks() + self.start
             self.remain = max(self.remain, 0)
             if self.remain == 0:
+                self.is_active = False
                 self.func()
 
     def reset(self):

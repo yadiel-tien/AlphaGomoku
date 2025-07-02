@@ -2,18 +2,11 @@ import json
 import threading
 import random
 
-import aiohttp
-import requests
 import pygame
-import torch
-
-from config import CONFIG
-from constant import BOARD_GRID_SIZE
+import requests
+from config import CONFIG, SETTINGS
 from deepMcts import NeuronMCTS
-from functions import is_onboard
-from inference import InferenceEngine
 from mcts import MCTS
-from network import Net
 
 
 class Player:
@@ -44,12 +37,17 @@ class Player:
 class Human(Player):
     def __init__(self, shape=(15, 15)):
         super().__init__()
-        self.cursor = pygame.image.load('graphics/cursor.png')
+        self.cursor = pygame.image.load('graphics/gomoku/cursor.png')
         self.screen = pygame.display.get_surface()
         self.cursor_pos = -1, -1
         self.rows, self.columns = shape
         self.center_x, self.center_y = None, None
         self.description = 'Human'
+
+    def _is_cursor_valid(self) -> bool:
+        """判断当前光标位置是否在棋盘上"""
+        x, y = self.cursor_pos
+        return 0 <= x < self.rows and 0 <= y < self.columns
 
     def handle_input(self, event):
         if self.is_active:
@@ -57,7 +55,7 @@ class Human(Player):
                 self.cursor_pos = self._pos2index(event.pos)
 
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if is_onboard(*self.cursor_pos, self.rows, self.columns):
+                if self._is_cursor_valid():
                     self._thinking = True
                 else:
                     self._thinking = False
@@ -71,41 +69,24 @@ class Human(Player):
             self._thinking = False
 
     def get_action(self, env):
-        env.render()
-        while True:
-            while True:
-                txt = input('输入落子位置坐标，示例"1,2"代表第1行第2列:')
-                txt = txt.replace('，', ',')
-                pos = txt.split(',')
-                if len(pos) == 2 and type(pos) is list and pos[0].isdigit() and pos[1].isdigit():
-                    break
-                else:
-                    print("输入格式有误，请输入行列编号，逗号隔开。")
-
-            pos = tuple(int(i) - 1 for i in pos)
-            action = env.coordinate2action(*pos)
-            if action in env.valid_actions():
-                break
-            else:
-                print("输入位置不合法，请重新输入！")
-        return action
+        return env.handle_human_input()
 
     def draw(self):
-        if is_onboard(*self.cursor_pos, self.rows, self.columns):
+        if self._is_cursor_valid():
             self.screen.blit(self.cursor, self._index2pos(*self.cursor_pos))
 
     def _pos2index(self, pos: tuple[int, int]) -> tuple[int, int]:
         if self.center_x is None:
             self.center_x, self.center_y = self.screen.get_rect().center
-        col = round((pos[0] - self.center_x) / BOARD_GRID_SIZE) + self.columns // 2
-        row = round((pos[1] - self.center_y) / BOARD_GRID_SIZE) + self.rows // 2
+        col = round((pos[0] - self.center_x) / SETTINGS['grid_size']) + self.columns // 2
+        row = round((pos[1] - self.center_y) / SETTINGS['grid_size']) + self.rows // 2
         return row, col
 
     def _index2pos(self, row, col) -> tuple[int, int]:
         if self.center_x is None:
             self.center_x, self.center_y = self.screen.get_rect().center
-        y = (row - self.rows // 2) * BOARD_GRID_SIZE + self.center_y - 18
-        x = (col - self.columns // 2) * BOARD_GRID_SIZE + self.center_x - 18
+        y = (row - self.rows // 2) * SETTINGS['grid_size'] + self.center_y - 18
+        x = (col - self.columns // 2) * SETTINGS['grid_size'] + self.center_x - 18
         return x, y
 
     def reset(self):
@@ -156,12 +137,35 @@ class AIClient(Player):
     def post_request(self, url, payload):
         try:
             headers = {'content-type': 'application/json'}
-            response = requests.post(url, data=json.dumps(payload), headers=headers)
-            response.raise_for_status()
+            response = requests.post(
+                url,
+                data=json.dumps(payload),
+                headers=headers,
+                timeout=10  # 添加超时设置
+            )
+            response.raise_for_status()  # 自动处理4xx/5xx错误
+
             return response.json()
+
+        except requests.exceptions.HTTPError as http_err:
+            error_msg = f'HTTP错误 ({response.status_code}): '
+            try:
+                error_data = response.json()
+                error_msg += str(error_data.get('error', error_data))
+            except ValueError:
+                error_msg += response.text or str(http_err)
+            print(error_msg)
+            raise  # 重新抛出异常
+
+        except json.JSONDecodeError as json_err:
+            error_msg = f'响应不是有效的JSON: {str(json_err)}'
+            print(error_msg)
+            raise requests.exceptions.RequestException(error_msg)
+
         except requests.exceptions.RequestException as e:
-            print(f'发生错误：{e}')
-        return None
+            error_msg = f'请求失败: {str(e)}'
+            print(error_msg)
+            raise  # 重新抛出异常
 
     def reset(self):
         self.request_reset()
@@ -175,23 +179,22 @@ class AIServer(Player):
         self._n_simulation = n_simulation
         self.mcts = None
         self.silent = silent
-        self.description = 'Server'
+        self.description = f'Server {self.infer.model_index}'
 
     def get_action(self, env):
         if not self.silent:
             print('思考中...')
-        self.run_mcts(env.state, env.last_action)
+        self.run_mcts(env)
         if not self.silent:
-            h, w = env.action2coordinate(int(self.pending_action))
-            print(f'选择落子：({h + 1},{w + 1})')
+            env.describe_move(int(self.pending_action))
         return self.pending_action
 
-    def run_mcts(self, state, last_action):
+    def run_mcts(self, env):
         if self.mcts is None:
             self.infer.start()
-            self.mcts = NeuronMCTS(state, self.infer)
+            self.mcts = NeuronMCTS(env, self.infer)
         else:
-            self.mcts.apply_action(state, last_action)
+            self.mcts.apply_action(env)
         self.mcts.run(self._n_simulation)
         self.pending_action = self.mcts.choose_action()
         self._thinking = False

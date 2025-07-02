@@ -36,18 +36,18 @@ class ResBlock(nn.Module):
 
 
 class PolicyHead(nn.Module):
-    def __init__(self, in_channels, n_filters, n_cells):
+    def __init__(self, in_channels, n_filters, n_cells, n_actions):
         """
         策略头，输出动作策略概率分布。[B,in_channels,H,W]->[B,H*W]/[H*W]
         :param in_channels: 输入通道数
         :param n_filters: 中间特征通道数量
-        :param n_cells: 动作空间大小,应为H*W
+        :param n_actions: 动作空间大小
         """
         super().__init__()
         self.conv = nn.Conv2d(in_channels, n_filters, kernel_size=1, stride=1)
         self.bn = nn.BatchNorm2d(n_filters)
         self.relu = nn.ReLU()
-        self.fc = nn.Linear(n_cells * n_filters, n_cells)
+        self.fc = nn.Linear(n_cells * n_filters, n_actions)
 
     def forward(self, x):
         # x:[B,in_channels,H,W]
@@ -56,9 +56,9 @@ class PolicyHead(nn.Module):
         x = x.reshape(x.shape[0], -1)  # 展平
         # x:[B,n_filters*H*W]
         x = self.fc(x)
-        # x:[B,H*W]
+        # x:[B,n_actions]
         # 如果批量为1，就消除批量层
-        # 如果B=1，则[1,H*W]->[H*W]
+        # 如果B=1，则[1,n_actions]->[n_actions]
         if x.ndim == 1:
             x = x.squeeze(0)
         # 直接返回原始 Logits
@@ -91,7 +91,7 @@ class ValueHead(nn.Module):
 
 
 class Net(nn.Module):
-    def __init__(self, n_filters, n_cells=15 * 15, n_res_blocks=7):
+    def __init__(self, n_filters, n_cells=15 * 15, n_res_blocks=7, n_channels=2, n_actions=15 * 15):
         """
         类alpha zero结构，双头输出policy和value
         :param n_filters: 卷积层通道数
@@ -99,9 +99,9 @@ class Net(nn.Module):
         :param n_res_blocks: 残差块个数
         """
         super().__init__()
-        self.conv_block = ConvBlock(2, n_filters)
+        self.conv_block = ConvBlock(n_channels, n_filters)
         self.res_blocks = nn.ModuleList([ResBlock(n_filters) for _ in range(n_res_blocks)])
-        self.policy = PolicyHead(n_filters, 32, n_cells)
+        self.policy = PolicyHead(n_filters, 32, n_cells, n_actions)
         self.value = ValueHead(n_filters, 256, n_cells)
 
     def forward(self, x):

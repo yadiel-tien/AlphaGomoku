@@ -1,12 +1,11 @@
 import numpy as np
-import torch
 from flask import Flask, request, jsonify
 
-from inference import make_engine
+from inference import InferenceEngine as Engine
 from player import AIServer
 
 app = Flask(__name__)
-AIes = [None, None]
+AIes: list[AIServer | None] = [None, None]
 
 
 @app.route('/setup', methods=['POST'])
@@ -17,11 +16,11 @@ def setup():
     try:
         player_idx = int(data['player_idx'])
         model_idx = int(data['model_idx'])
-        infer = make_engine(model_idx)
+        infer = Engine.make_engine(model_idx)
         AIes[player_idx] = AIServer(infer, 1000)
     except Exception as e:
         print(f'Failed to setup AI: {e}')
-        return jsonify({"error": f'Failed to parse input:{e}'}), 400
+        return jsonify({"error": f'Failed to setup AI:{e}'}), 400
 
     return jsonify({"status": "success"})
 
@@ -43,7 +42,7 @@ def make_move():
         action = int(AIes[player_idx].pending_action)
         return jsonify({"action": action})
     except Exception as e:
-        return jsonify({"error": f'Failed to parse input:{e}'}), 400
+        return jsonify({"error": f'Failed to make move:{e}'}), 400
 
 
 @app.route('/reset', methods=['POST'])
@@ -60,8 +59,8 @@ def reset():
         else:
             return jsonify({"error": "Player have not been setup"}), 400
     except Exception as e:
-        return jsonify({"error": f'Failed to parse input:{e}'}), 400
+        return jsonify({"error": f'Failed to reset:{e}'}), 400
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)

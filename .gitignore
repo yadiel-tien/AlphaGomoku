@@ -1,0 +1,9 @@
+venv/
+result.json
+trace_processor
+__pycache__/
+.ipynb_checkpoints/
+data/
+.vscode/
+.idea
+.DS_Store

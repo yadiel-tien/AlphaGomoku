@@ -16,8 +16,9 @@ def setup():
     try:
         player_idx = int(data['player_idx'])
         model_idx = int(data['model_idx'])
+        env_name = data['env_class']
         infer = Engine.make_engine(model_idx)
-        AIes[player_idx] = AIServer(infer, 1000)
+        AIes[player_idx] = AIServer(infer, env_name, 1000)
     except Exception as e:
         print(f'Failed to setup AI: {e}')
         return jsonify({"error": f'Failed to setup AI:{e}'}), 400
@@ -37,10 +38,9 @@ def make_move():
         if last_action is not None:
             last_action = int(last_action)
         player_idx = int(data['player_idx'])
-
-        AIes[player_idx].run_mcts(state, last_action)
-        action = int(AIes[player_idx].pending_action)
-        return jsonify({"action": action})
+        player_to_move = int(data['player_to_move'])
+        action = AIes[player_idx].get_action(state, last_action, player_to_move)
+        return jsonify({"last_action": action})
     except Exception as e:
         return jsonify({"error": f'Failed to make move:{e}'}), 400
 

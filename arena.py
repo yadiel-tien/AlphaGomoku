@@ -3,7 +3,7 @@ import pickle
 import random
 
 from config import CONFIG
-from gomoku import GomokuEnv
+from gomoku import Gomoku
 from inference import make_engine
 from player import AIServer
 from train import get_logger
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     arena = Arena()
     # for i in [120, 234, 319, 199, 209, 30, 130, 70,354,329]:
     #     arena.add(i)
-    arena.run(50, GomokuEnv(15, 15))
+    arena.run(50, Gomoku(15, 15))
     # arena.rates[319].show_records()
     arena.show_rank()
     arena.shutdown()

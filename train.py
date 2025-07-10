@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm
 
 from chess import ChineseChess
-from gomoku import GomokuEnv
+from gomoku import Gomoku
 from config import SETTINGS, CONFIG
 from deepMcts import NeuronMCTS
 from inference import InferenceEngine, make_engine, run_mp_infer_engine
@@ -47,7 +47,7 @@ def get_logger(name, log_dir=SETTINGS['log_dir']):
 
 
 def self_play1game(n_simulation):
-    env = GomokuEnv()
+    env = Gomoku()
     env.reset()
     mcts = NeuronMCTS(env, global_req_q, is_self_play=True)
     step = 0
@@ -57,7 +57,7 @@ def self_play1game(n_simulation):
         temperature = 0.2 if step > 2 else 1  # 前几步鼓励探索
         mcts.run(n_simulation)  # 模拟
         pi = mcts.get_pi(temperature)  # 获取mcts的概率分布pi
-        q = mcts.root.W / (mcts.root.N + 1)
+        q = mcts.root.w / (mcts.root.n + 1)
         experiences.append((np.copy(env.state), pi, q))
         # 根据pi来选择动作
         action = np.random.choice(len(pi), p=pi)
@@ -233,7 +233,7 @@ class Trainer:
         with ThreadPoolExecutor(8, thread_name_prefix='eval-') as pool:
             futures = []
             for _ in range(n_evaluation):
-                env = GomokuEnv()
+                env = Gomoku()
                 players = [AIServer(self.latest_infer), AIServer(self.best_infer)]
                 futures.append(pool.submit(env.random_order_play, players, silent=True))
             result = []

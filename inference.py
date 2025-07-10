@@ -9,10 +9,13 @@ from typing import Self
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
 
-from config import CONFIG, SETTINGS
+from config import CONFIG
 from functions import apply_symmetry, reverse_symmetry_prob
 from network import Net
+
+settings = CONFIG[CONFIG['game_name']]
 
 
 class InferenceRequest:
@@ -35,7 +38,8 @@ class InferenceEngine:
         self._running = False
         self.start()
 
-    def start(self):
+    def start(self) -> None:
+        """启动推理线程"""
         if not self._running:
             self._running = True
         if self.thread is None:
@@ -47,7 +51,7 @@ class InferenceEngine:
         self.model.to(CONFIG['device']).eval()
         self.model_index = -1
 
-    def update_from_index(self, index, path_prefix=SETTINGS['model_path_prefix']):
+    def update_from_index(self, index, path_prefix=settings['model_path_prefix']):
         path = path_prefix + f'{index}.pt'
         if os.path.exists(path):
             self.model.load_state_dict(torch.load(path))
@@ -98,7 +102,7 @@ class InferenceEngine:
                 requests[i].value = values[i]
                 requests[i].event.set()
 
-    def request(self, state, is_self_play=False):
+    def request(self, state: NDArray, is_self_play=False) -> tuple[NDArray, float]:
         if not self._running:
             raise RuntimeError('Inference engine is not running')
         if is_self_play:  # 自我对弈时数据收集时会进行数据扩充
@@ -128,21 +132,21 @@ class InferenceEngine:
 
     @classmethod
     def make_engine(cls, model_idx: int) -> Self:
-        model = Net(SETTINGS['n_filter'], SETTINGS['n_cells'], SETTINGS['n_res_blocks'], SETTINGS['n_channels'],
-                    SETTINGS['n_actions'])
+        model = Net(settings['n_filter'], settings['n_cells'], settings['n_res_blocks'], settings['n_channels'],
+                    settings['n_actions'])
         infer = cls(model)
         infer.update_from_index(model_idx)
         return infer
 
 
 def run_mp_infer_engine(model_index, req_q):
-    model = Net(SETTINGS['n_filter'], SETTINGS['n_cells'], SETTINGS['n_res_blocks'], SETTINGS['n_channels'],
-                SETTINGS['n_actions']).to(CONFIG['device']).eval()
-    path = os.path.join(SETTINGS['model_path_prefix'], f'{model_index}.pt')
+    model = Net(settings['n_filter'], settings['n_cells'], settings['n_res_blocks'], settings['n_channels'],
+                settings['n_actions']).to(CONFIG['device']).eval()
+    path = os.path.join(settings['model_path_prefix'], f'{model_index}.pt')
     if os.path.exists(path):
         model.load_state_dict(torch.load(path))
-    batch_size = SETTINGS['batch_size']
-    max_delay = SETTINGS['max_delay']
+    batch_size = settings['batch_size']
+    max_delay = settings['max_delay']
     running = True
     while running:
         batch, pipes = [], []

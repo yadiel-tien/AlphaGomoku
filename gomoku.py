@@ -1,187 +1,169 @@
 import re
 
-import gymnasium as gym
 from gymnasium import spaces
 import pygame
-import random
+
+from numpy.typing import NDArray
 
 from chess import ChineseChess
-from config import CONFIG
-from inference import InferenceEngine as IE
-from player import Human, AIServer
-from ui import Button
+from config import CONFIG, GameConfig
+from env import BaseEnv, GameUI
+from inference import InferenceEngine as Engine
+from player import Human, AIServer, Player
 import numpy as np
+from typing import cast, TypeAlias
 
-from utils import Timer
+settings: GameConfig = CONFIG['Gomoku']
+GomokuMove: TypeAlias = tuple[int, int]
 
-settings = CONFIG['gomoku']
 
+class Gomoku(BaseEnv):
+    shape: tuple[int, int, int] = 15, 15, 2
 
-class GomokuEnv(gym.Env):
     def __init__(self, rows: int = 15, columns: int = 15):
         super().__init__()
-        self.shape = rows, columns, 2
-        self.state = None
+        self.shape: tuple[int, int, int] = rows, columns, 2
         self.action_space = spaces.Discrete(rows * columns)
+        self.n_actions = rows * columns
         self.observation_space = spaces.Box(0, 1, shape=self.shape, dtype=np.float32)
-        self.current_player = 0  # 当前走棋方，0代表黑，1代表白
-        self.winner = 2  # 0,1代表获胜玩家，-1代表平局，2代表未决胜负
-        self.terminated = False
-        self.truncated = False
-        self.last_action = None
         self.reset()
 
-    def reset(self, seed=None, options=None) -> tuple[np.ndarray, dict]:
+    def reset(self, seed=None, options=None) -> tuple[NDArray[np.int_], dict]:
         """
         重置游戏, 返回当前棋盘状态
         state=[Xt, Yt]
         Xt 1代表有当前玩家棋子，0代表无当前玩家棋子，Yt 1代表有对手玩家棋子，0代表无对手玩家棋子
         """
         self.state = np.zeros(self.shape, dtype=np.float32)
-        self.current_player = 0
-        self.terminated = False
-        self.truncated = False
-        self.last_action = None
-        self.winner = 2
+        self.reset_status()
         return self.state, {}
 
-    def run(self, players, silent=False):
-        """模拟玩家比赛，玩家1胜返回0，玩家2胜返回1，平局返回-1"""
-        self.reset()
-        for player in players:
-            player.silent = silent
-            player.reset()
+    @classmethod
+    def convert_to_network(cls, state: NDArray, current_player: int) -> NDArray:
+        return state
 
-        index = 0
-        while True:
-            if not silent:
-                print(f'-----player{index + 1}-----')
-
-            action = players[index].get_action(self)
-            _, reward, terminated, truncated, _ = self.step(action)
-            if terminated or truncated:
-                outcome = self.winner
-                break
-            index = 1 - index
-        return outcome
-
-    def random_order_play(self, players, silent=False):
-        """随机一局对弈，先手顺序随机"""
-        n = random.randint(0, 1)
-        p1, p2 = players
-        current_players = [p1, p2] if n == 0 else [p2, p1]
-        winner = self.run(current_players, silent=silent)
-        if winner == -1:
-            return -1
-        if n == 0:
-            return winner
-        else:
-            return 1 - winner
-
-    def evaluate(self, players, n_rounds=100):
-        """2玩家对弈，打印胜率"""
-        outcomes = []
-        for i in range(n_rounds):
-            print(f'第{i + 1}局:', end=' ')
-            # 改变先手顺序
-            outcome = self.random_order_play(players)
-            outcomes.append(outcome)
-            print(f'比赛结果：{outcome}')
-
-        print(f"Player 1 Win Percentage:{outcomes.count(0) / n_rounds:.2%}", )
-        print(f"Player 2 Win Percentage:{outcomes.count(1) / n_rounds:.2%}")
-        print(f"Draw Percentage:{outcomes.count(-1) / n_rounds:.2%}")
-        return outcomes
-
-    def valid_actions(self):
-        state = self.state[:, :, 0] + self.state[:, :, 1]
+    @classmethod
+    def get_valid_actions(cls, state: NDArray, player_to_move: int) -> NDArray[np.int_]:
+        state = state[:, :, 0] + state[:, :, 1]
         return np.flatnonzero(state == 0)
 
-    def step(self, action: int) -> tuple[np.ndarray, int, bool, bool, dict]:
+    @classmethod
+    def virtual_step(cls, state: NDArray[np.float32], action: int) -> NDArray[np.float32]:
+        """只改变state，不计算输赢和奖励"""
+        new_state = np.copy(state)
+        row, col = cls.action2move(action)
+        # 执行落子
+        new_state[row, col, 0] = 1
+
+        # 更改棋盘和当前玩家
+        new_state[:, :, [0, 1]] = new_state[:, :, [1, 0]]
+        return new_state
+
+    @classmethod
+    def step_fn(cls, state: NDArray[np.float32], action: int, player_to_move: int) -> tuple[
+        NDArray[np.float32], int, bool, bool, dict]:
+        """脱离环境进行step"""
+        new_state = cls.virtual_step(state, action)
+        player_just_moved = player_to_move
+        winner = cls.check_winner(new_state, player_just_moved, action)
+        # 胜利奖励1，平局或未结束奖励0，隐含失败后对手奖励1，通过min-max自己奖励-1
+        reward = 0
+        terminated = False
+        if winner == player_just_moved:  # 落子导致胜利
+            reward = 1
+        if winner != 2:
+            terminated = True
+
+        return new_state, reward, terminated, False, {}
+
+    def step(self, action: int) -> tuple[NDArray[np.float32], int, bool, bool, dict]:
         """
         执行落子
         :param action: 动作编号（棋盘上的位置）
         :return: observation（新的state）, reward（奖励）, terminated（是否结束）,truncated(是否因时间限制中断）, info（额外信息）
         """
-        if self.terminated or self.truncated:
-            raise ValueError('Game is already over.')
-        if action not in self.valid_actions():
-            raise ValueError('Invalid move: position already occupied or not in action space')
-
-        row, col = self.action2coordinate(action)
         # 执行落子
-        self.state[row, col, 0] = 1
+        self.state, reward, terminated, _, _ = self.step_fn(self.state, action, self.player_to_move)
+        if terminated:
+            winner = self.player_to_move if reward == 1 else -1
+            self.set_winner(winner)
 
-        # 更改棋盘和当前玩家
-        self.state[:, :, [0, 1]] = self.state[:, :, [1, 0]]
-        self.current_player = 1 - self.current_player
+        # 更改玩家
+        self.player_to_move = 1 - self.player_to_move
         self.last_action = action
 
-        self.check_win()
         # 胜利奖励1，平局或未结束奖励0，隐含失败后对手奖励1，通过min-max自己奖励-1
         reward = 0
-        if self.winner == 1 - self.current_player:  # 落子导致胜利
+        if self.winner == 1 - self.player_to_move:  # 落子导致胜利
             reward = 1
 
-        return self.state, reward, self.terminated, self.truncated, {}
+        return self.state, reward, terminated, self.truncated, {}
 
-    def check_win(self):
-        """对方落子后，检查胜利情况，并设置terminated，winner"""
-        if self.last_action:
-            # 和棋
-            if self._is_draw():
-                self.set_winner(-1)
-            # 检查是否连成5子
-            elif self.get_win_stones():
-                self.set_winner(1 - self.current_player)
+    @classmethod
+    def check_winner(cls, state: NDArray, player_just_moved: int, action_just_executed: int) -> int:
+        """:return 0，1玩家，2未分胜负，-1和"""
+        # 和棋
+        if cls._is_draw(state):
+            return -1
+        # 检查是否连成5子
+        if cls.get_win_stones(state, action_just_executed):
+            return player_just_moved
+        return 2
 
-    def set_winner(self, winner):
-        self.terminated = True
-        self.winner = winner
-
-    def coordinate2action(self, row, col) -> int:
+    @classmethod
+    def move2action(cls, move: GomokuMove) -> int:
         """从 (row, col) 坐标获取动作编号"""
-        return row * self.shape[1] + col
+        row, col = move
+        return row * cls.shape[1] + col
 
-    def action2coordinate(self, move) -> tuple[int, int]:
+    @classmethod
+    def action2move(cls, action: int) -> GomokuMove:
         """从动作编号获取坐标 (row, col)"""
-        return divmod(move, self.shape[1])
+        return divmod(action, cls.shape[1])
 
-    def describe_move(self, action):
-        row, col = self.action2coordinate(action)
+    @classmethod
+    def describe_move(cls, state: NDArray, action: int) -> None:
+        """无UI对弈时，打印描述行棋的说明"""
+        row, col = cls.action2move(action)
         print(f'选择落子：({row + 1},{col + 1})')
 
-    def _is_draw(self):
-        return np.all(np.logical_or(self.state[:, :, 0], self.state[:, :, 1]))
+    @staticmethod
+    def _is_draw(state: NDArray) -> bool:
+        return np.all(np.logical_or(state[:, :, 0], state[:, :, 1]))
 
-    def get_win_stones(self):
-        """在获胜的情况下获取连成5子的棋子"""
-        h, w, _ = self.shape
-        h0, w0 = self.action2coordinate(self.last_action)
+    @classmethod
+    def get_win_stones(cls, state: NDArray, action_just_executed: int) -> list[tuple[int, int]]:
+        """落子后检查获胜的情况，获胜返回连成5子的棋子位置，未获胜返回空列表[]"""
+        h, w, _ = cls.shape
+        h0, w0 = cls.action2move(action_just_executed)
         for dh, dw in [(1, 0), (1, 1), (0, 1), (-1, 1)]:
             stones = [(h0, w0)]
             for direction in (-1, 1):
                 for step in range(1, 5):
                     i, j = h0 + step * dh * direction, w0 + step * dw * direction
-                    if 0 <= i < h and 0 <= j < w and self.state[i, j, 1]:
+                    if 0 <= i < h and 0 <= j < w and state[i, j, 1]:
                         stones.append((i, j))
                         if len(stones) == 5:
                             return stones
                     else:
                         break
-        return None
+        return []
 
     def render(self) -> None:
+        self.render_fn(self.state, self.player_to_move)
+
+    @classmethod
+    def render_fn(cls, state: NDArray, player_to_move: int) -> None:
         """打印棋盘"""
         board_str = ''
-        col_indices = [str(i + 1) for i in range(self.shape[1])]
+        col_indices = [str(i + 1) for i in range(cls.shape[1])]
         head = '  '
         for idx in col_indices:
             head += f'{idx:>3}'
         board_str += head + '\n'
-        for i, row in enumerate(self.state):
+        for i, row in enumerate(state):
             board_str += f'{i + 1:>2}  ' + '  '.join(
-                ['X' if cell[self.current_player] else 'O' if cell[1 - self.current_player] else '.'
+                ['X' if cell[player_to_move] else 'O' if cell[1 - player_to_move] else '.'
                  for cell in row]) + '\n'
             # 用红色显示玩家 1 的棋子 (1)
         board_str = re.sub(r'\bX\b', '\033[31mX\033[0m', board_str)
@@ -189,8 +171,10 @@ class GomokuEnv(gym.Env):
         board_str = re.sub(r'\bO\b', '\033[34mO\033[0m', board_str)
         print(board_str)
 
-    def handle_human_input(self):
-        self.render()
+    @classmethod
+    def handle_human_input(cls, state: NDArray, last_action: int, player_to_move: int) -> int:
+        cls.render_fn(state, player_to_move)
+        valid_actions = cls.get_valid_actions(state, player_to_move)
         while True:
             while True:
                 txt = input('输入落子位置坐标，示例"1,2"代表第1行第2列:')
@@ -202,58 +186,34 @@ class GomokuEnv(gym.Env):
                     print("输入格式有误，请输入行列编号，逗号隔开。")
 
             pos = tuple(int(i) - 1 for i in pos)
-            action = env.coordinate2action(*pos)
-            if action in env.valid_actions():
+            action = cls.move2action(*pos)
+            if action in valid_actions:
                 break
             else:
                 print("输入位置不合法，请重新输入！")
         return action
 
 
-class GomokuUI:
-    def __init__(self, rows=15, columns=15, players=None):
+class GomokuUI(GameUI):
+    def __init__(self, players: list[Player], rows=15, columns=15):
+        super().__init__(Gomoku(rows, columns), players, settings['img_path'])
         self.black_piece = pygame.image.load('graphics/gomoku/black.png')
         self.white_piece = pygame.image.load('graphics/gomoku/white.png')
         self.mark_pic = pygame.image.load('graphics/gomoku/circle.png')
-        self.image = pygame.image.load('graphics/gomoku/chessBoard.jpeg')
-        self.place_sound = pygame.mixer.Sound('sound/place_stone.mp3')
-        self.win_sound = pygame.mixer.Sound('sound/win.mp3')
-        pygame.mixer.music.load('sound/bgm.mp3')
-        pygame.mixer.music.set_volume(0.5)
-        self.screen = pygame.display.get_surface()
-        self.rect = self.image.get_rect(center=self.screen.get_rect().center)
-        self.env = GomokuEnv(rows, columns)
-        self.players = players
-        self.start_btn = Button("Start", self.start, (200, 680), color='green')
-        self.reverse_player_btn = Button(f'First:{players[0].description}', self.reverse_player, pos=(200, 740),
-                                         color='grey')
-        self.status = 'new'  # new playing finished
-        # 0,1分别代表黑方白方
-        self.timers = {0: Timer(limit=60000, func=self.time_up), 1: Timer(limit=60000, func=self.time_up)}
-        self.history = []
+        self.cursor_pic = pygame.image.load('graphics/gomoku/cursor.png')
+        self.env = cast(Gomoku, self.env)
+        self.settings = settings
 
-    def handle_input(self, event):
-        if self.status == 'playing':
-            self.players[self.env.current_player].handle_input(event)
-        else:
-            self.start_btn.handle_input(event)
-            self.reverse_player_btn.handle_input(event)
+    def handle_human_input(self) -> None:
+        player = cast(Human, self.players[self.env.player_to_move])
+        if player.selected_grid is None:
+            return
+        action = self.env.move2action(player.selected_grid)
+        if action in self.env.valid_actions:
+            player.pending_action = action
 
-    def update(self):
-        if self.status == 'playing':
-            player = self.players[self.env.current_player]
-            if player.pending_action is None:
-                player.update(self.env)
-            else:
-                row, col = self.env.action2coordinate(player.pending_action)
-                self.history.append((row, col, self.env.current_player))
-                self.env.step(player.pending_action)
-                player.pending_action = None
-                self.place_sound.play()
-                if self.env.terminated or self.env.truncated:
-                    self.set_win_status()
-                else:
-                    self.switch_side()
+    def play_place_sound(self, action: int) -> None:
+        self.piece_sound.play()
 
     def draw(self):
         self.screen.fill('#DDDDBB')
@@ -265,7 +225,7 @@ class GomokuUI:
         if self.status == 'finished':
             self.draw_step_mark()
             self.draw_victory_badge()
-            if self.timers[self.env.current_player].remain > 0:
+            if self.timers[self.env.player_to_move].remain > 0:
                 self.draw_victory_stones()
             self.start_btn.draw()
             self.reverse_player_btn.draw()
@@ -277,125 +237,52 @@ class GomokuUI:
             self.draw_player()
             self.draw_cursor()
 
-    def time_up(self):
-        for side, timer in self.timers.items():
-            if timer.remain == 0:
-                self.env.set_winner(1 - side)
-                self.set_win_status()
-
-    def switch_side(self):
-        current_player = self.env.current_player
-        prev_player = 1 - current_player
-        # 重设timer
-        self.timers[prev_player].reset()
-        self.timers[current_player].activate()
-        # 修改玩家状态
-        self.players[prev_player].is_active = False
-        self.players[current_player].is_active = True
-
-    def set_win_status(self):
-        self.status = 'finished'
-        self.start_btn.text = "Restart"
-        pygame.mixer.music.stop()
-        self.win_sound.play()
-
     def draw_pieces(self):
 
         # 获取所有白棋和黑棋的位置
-        white_positions = np.argwhere(self.env.state[:, :, 1 - self.env.current_player])
-        black_positions = np.argwhere(self.env.state[:, :, self.env.current_player])
+        white_positions = np.argwhere(self.env.state[:, :, 1 - self.env.player_to_move])
+        black_positions = np.argwhere(self.env.state[:, :, self.env.player_to_move])
 
         # 绘制所有白棋
         for pos in white_positions:
-            x, y = self._index2pos(row=pos[0], col=pos[1])
+            x, y = self._grid2pos(pos)
             self.screen.blit(self.white_piece, (x, y))
 
         # 绘制所有黑棋
         for pos in black_positions:
-            x, y = self._index2pos(row=pos[0], col=pos[1])
+            x, y = self._grid2pos(pos)
             self.screen.blit(self.black_piece, (x, y))
-
-    def _index2pos(self, row: int, col: int) -> tuple[float, float]:
-        rows, columns, _ = self.env.shape
-        y = (row - rows // 2) * settings['grid_size'] + self.rect.centery - 17
-        x = (col - columns // 2) * settings['grid_size'] + self.rect.centerx - 17
-        return x, y
 
     def draw_step_mark(self):
         font = pygame.font.Font(None, 16)
-        for idx, (row, col, mark) in enumerate(self.history):
+        for idx, (action, mark) in enumerate(self.history):
             color = 'black' if mark else 'white'  # 黑棋则白字，白棋则黑字
             text = font.render(str(idx + 1), True, color)
-            x, y = self._index2pos(row, col)
+            x, y = self._grid2pos(self.env.action2move(action))
             rect = text.get_rect(center=(x + 17, y + 17))
             self.screen.blit(text, rect.topleft)
 
     def draw_last_mark(self):
         if self.history:
-            row, col, _ = self.history[-1]
-            x, y = self._index2pos(row, col)
+            action, _ = self.history[-1]
+            move = self.env.action2move(action)
+            x, y = self._grid2pos(move)
             self.screen.blit(self.mark_pic, (x, y))
 
     def draw_victory_badge(self):
         winner = 'black' if self.env.winner == 0 else 'white' if self.env.winner == 1 else 'draw'
         path = f'graphics/gomoku/{winner}_win.png'
-        image = pygame.image.load(path)
-        image = pygame.transform.scale(image, (200, 200))
-        x = self.rect.centerx
-        y = 60
-        rect = image.get_rect(center=(x, y))
-        self.screen.blit(image, rect.topleft)
-        font = pygame.font.Font(None, 36)
-        text = font.render(f'winner:{self.players[1 - self.env.current_player].description}', True, (255, 255, 30))
-        rect = text.get_rect(center=(x, y))
-        self.screen.blit(text, rect.topleft)
+        self.draw_victory(path)
 
     def draw_victory_stones(self):
-        for row, col in self.env.get_win_stones():
-            x, y = self._index2pos(row, col)
+        for grid in self.env.get_win_stones(self.env.state, self.env.last_action):
+            x, y = self._grid2pos(grid)
             self.screen.blit(self.mark_pic, (x, y))
 
-    def draw_new_game_title(self):
-        font = pygame.font.Font(None, 70)
-        text = font.render('New Game', True, 'orange')
-        x = self.rect.centerx
-        y = 60
-        rect = text.get_rect(center=(x, y))
-        self.screen.blit(text, rect.topleft)
-
-    def start(self):
-        if self.status == 'finished':
-            self.env.reset()
-            for timer in self.timers.values():
-                timer.reset()
-        self.history = []
-        self.status = 'playing'
-        # 重设玩家
-        for player in self.players:
-            player.reset()
-        # 当前玩家开始计时
-        self.players[self.env.current_player].is_active = True
-        self.timers[self.env.current_player].activate()
-        pygame.mixer.music.play()
-
-    def reverse_player(self):
-        self.players.reverse()
-        self.reverse_player_btn.text = f'First: {self.players[0].description}'
-
-    def draw_player(self):
-        self.timers[self.env.current_player].update()
-        white_sec = self.timers[1].remain // 1000
-        black_sec = self.timers[0].remain // 1000
-        font = pygame.font.Font(None, 60)
-        white = font.render(f'{self.players[1].description}  White:{white_sec:02}', True, 'orange')
-        black = font.render(f'{self.players[0].description} Black:{black_sec:02}', True, 'orange')
-        white_rect = white.get_rect(midleft=(60, 60))
-        black_rect = black.get_rect(midleft=(60, 740))
-        self.screen.blit(white, white_rect.topleft)
-        self.screen.blit(black, black_rect.topleft)
-
     def draw_cursor(self):
-        self.players[self.env.current_player].draw()
+        if self.cursor_grid is not None:
+            x, y = self._grid2pos(self.cursor_grid)
+            self.screen.blit(self.cursor_pic, (x, y))
 
     def draw_boundary(self):
         if self.env.shape[:2] == (15, 15):
@@ -406,7 +293,7 @@ class GomokuUI:
         w0 = settings['grid_size'] * 15
         h0 = settings['grid_size'] * 15
         # 可下棋区域
-        x, y = self._index2pos(row=0, col=0)
+        x, y = self._grid2pos((0, 0))
         h, w, _ = self.env.shape
         w *= settings['grid_size']
         h *= settings['grid_size']
@@ -420,13 +307,13 @@ class GomokuUI:
 
 if __name__ == '__main__':
     env = ChineseChess()
-    infer1, infer2 = IE.make_engine(209), IE.make_engine(120)
+    infer1, infer2 = Engine.make_engine(209), Engine.make_engine(120)
     competitors = [Human(), AIServer(infer2)]
-    winner = env.run(competitors)
+    victor = env.run(competitors)
     env.render()
-    if winner == -1:
+    if victor == -1:
         print('平局')
     else:
-        print(f'玩家1:{competitors[winner].description} 获胜')
+        print(f'玩家1:{competitors[victor].description} 获胜')
     infer1.shutdown()
     infer2.shutdown()

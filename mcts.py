@@ -14,7 +14,7 @@ class Node:
         self.children: List[Node] = []
         self.visits = 0
         self.score = 0
-        self.valid_actions = env.valid_actions()
+        self.valid_actions = env.valid_actions
         self._uct = None
         self.uct_dirty = True
         self.is_leaf = self.env.terminated
@@ -47,18 +47,17 @@ class Node:
 
     def rollout(self) -> int:
         # 对于任意node，对手已胜利就返回1
-        if self.env.winner == 1 - self.env.current_player:
+        if self.env.winner == 1 - self.env.player_to_move:
             return 1
-        elif self.env.winner == self.env.current_player:
+        elif self.env.winner == self.env.player_to_move:
             return -1
         elif self.env.winner == -1:
             return 0
 
-        current_player = self.env.current_player
+        current_player = self.env.player_to_move
         env = self.env.copy()
         while True:
-            valid_actions = env.valid_actions()
-            action = random.choice(valid_actions)
+            action = random.choice(env.valid_actions)
             env.step(action)
 
             if env.winner == current_player:
